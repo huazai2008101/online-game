@@ -4,19 +4,18 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
-	"golang.org/x/crypto/bcrypt"
 
 	"online-game/pkg/api"
 )
 
 // Handler handles HTTP requests for the user service
 type Handler struct {
-	repo *Repository
+	service *Service
 }
 
 // NewHandler creates a new handler
-func NewHandler(repo *Repository) *Handler {
-	return &Handler{repo: repo}
+func NewHandler(service *Service) *Handler {
+	return &Handler{service: service}
 }
 
 // RegisterRoutes registers all routes for the user service
@@ -31,6 +30,10 @@ func (h *Handler) RegisterRoutes(r *gin.RouterGroup) {
 		users.GET("/:id", h.GetUser)
 		users.PUT("/:id", h.UpdateUser)
 		users.DELETE("/:id", h.DeleteUser)
+		users.POST("/:id/ban", h.BanUser)
+		users.POST("/:id/unban", h.UnbanUser)
+		users.POST("/check-username", h.CheckUsername)
+		users.POST("/reset-password", h.ResetPassword)
 	}
 
 	profiles := r.Group("/profiles")
@@ -39,12 +42,9 @@ func (h *Handler) RegisterRoutes(r *gin.RouterGroup) {
 		profiles.PUT("/:id", h.UpdateProfile)
 	}
 
-	friends := r.Group("/friends")
+	password := r.Group("/password")
 	{
-		friends.POST("", h.AddFriend)
-		friends.GET("", h.GetFriends)
-		friends.PUT("/:friend_id", h.UpdateFriend)
-		friends.DELETE("/:friend_id", h.DeleteFriend)
+		password.POST("/change", h.ChangePassword)
 	}
 }
 
@@ -71,42 +71,11 @@ func (h *Handler) Register(c *gin.Context) {
 		return
 	}
 
-	// Check if username exists
-	if _, err := h.repo.GetUserByUsername(req.Username); err == nil {
-		api.BadRequest(c, "用户名已存在")
-		return
-	}
-
-	// Check if email exists
-	if _, err := h.repo.GetUserByEmail(req.Email); err == nil {
-		api.BadRequest(c, "邮箱已被注册")
-		return
-	}
-
-	// Hash password
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	user, err := h.service.Register(c.Request.Context(), &req)
 	if err != nil {
-		api.InternalError(c, "密码加密失败")
+		api.HandleError(c, err)
 		return
 	}
-
-	user := &User{
-		Username: req.Username,
-		Password: string(hashedPassword),
-		Email:    req.Email,
-		Phone:    req.Phone,
-		Nickname: req.Nickname,
-		Status:   1,
-	}
-
-	if err := h.repo.CreateUser(user); err != nil {
-		api.InternalError(c, "创建用户失败")
-		return
-	}
-
-	// Create profile
-	profile := &UserProfile{UserID: user.ID}
-	_ = h.repo.CreateProfile(profile)
 
 	// Hide password in response
 	user.Password = ""
@@ -122,37 +91,18 @@ func (h *Handler) Login(c *gin.Context) {
 		return
 	}
 
-	user, err := h.repo.GetUserByUsername(req.Username)
+	resp, err := h.service.Login(c.Request.Context(), &req)
 	if err != nil {
-		api.Unauthorized(c, "用户名或密码错误")
+		api.HandleError(c, err)
 		return
 	}
 
-	// Verify password
-	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.Password)); err != nil {
-		api.Unauthorized(c, "用户名或密码错误")
-		return
-	}
-
-	// Check status
-	if user.Status != 1 {
-		api.Forbidden(c, "账号已被禁用")
-		return
-	}
-
-	// TODO: Generate JWT token
-	// For now, return user info
-	user.Password = ""
-
-	api.Success(c, gin.H{
-		"user":  user,
-		"token": "jwt-token-placeholder",
-	})
+	api.SuccessWithMessage(c, "登录成功", resp)
 }
 
 // Logout handles user logout
 func (h *Handler) Logout(c *gin.Context) {
-	// TODO: Invalidate JWT token
+	// TODO: Invalidate JWT token from session
 	api.SuccessWithMessage(c, "退出成功", nil)
 }
 
@@ -163,15 +113,15 @@ func (h *Handler) ListUsers(c *gin.Context) {
 		params = api.DefaultPagination()
 	}
 
-	users, total, err := h.repo.ListUsers(params.GetOffset(), params.PerPage)
+	users, total, err := h.service.ListUsers(c.Request.Context(), params.Page, params.PerPage)
 	if err != nil {
-		api.InternalError(c, "获取用户列表失败")
+		api.HandleError(c, err)
 		return
 	}
 
 	// Hide passwords
-	for _, u := range users {
-		u.Password = ""
+	for i := range users {
+		users[i].Password = ""
 	}
 
 	api.Paginated(c, users, params.Page, params.PerPage, total)
@@ -180,15 +130,14 @@ func (h *Handler) ListUsers(c *gin.Context) {
 // GetCurrentUser retrieves the current authenticated user
 func (h *Handler) GetCurrentUser(c *gin.Context) {
 	// TODO: Get user ID from JWT token
-	userID := uint(1) // Placeholder
+	userID := getUserID(c)
 
-	user, err := h.repo.GetUserByID(userID)
+	user, err := h.service.GetProfile(c.Request.Context(), userID)
 	if err != nil {
-		api.NotFound(c, "用户不存在")
+		api.HandleError(c, err)
 		return
 	}
 
-	user.Password = ""
 	api.Success(c, user)
 }
 
@@ -200,13 +149,12 @@ func (h *Handler) GetUser(c *gin.Context) {
 		return
 	}
 
-	user, err := h.repo.GetUserByID(uint(id))
+	user, err := h.service.GetProfile(c.Request.Context(), uint(id))
 	if err != nil {
-		api.NotFound(c, "用户不存在")
+		api.HandleError(c, err)
 		return
 	}
 
-	user.Password = ""
 	api.Success(c, user)
 }
 
@@ -214,7 +162,8 @@ func (h *Handler) GetUser(c *gin.Context) {
 type UpdateUserRequest struct {
 	Nickname string `json:"nickname" binding:"omitempty,max=50"`
 	Avatar   string `json:"avatar" binding:"omitempty,max=255"`
-	Status   *int   `json:"status" binding:"omitempty,min=0,max=2"`
+	Phone    string `json:"phone" binding:"omitempty,max=20"`
+	Email    string `json:"email" binding:"omitempty,email,max=100"`
 }
 
 // UpdateUser updates a user
@@ -231,29 +180,27 @@ func (h *Handler) UpdateUser(c *gin.Context) {
 		return
 	}
 
-	user, err := h.repo.GetUserByID(uint(id))
-	if err != nil {
-		api.NotFound(c, "用户不存在")
-		return
-	}
-
+	// Convert to map for UpdateProfile
+	updateMap := make(map[string]interface{})
 	if req.Nickname != "" {
-		user.Nickname = req.Nickname
+		updateMap["nickname"] = req.Nickname
 	}
 	if req.Avatar != "" {
-		user.Avatar = req.Avatar
+		updateMap["avatar"] = req.Avatar
 	}
-	if req.Status != nil {
-		user.Status = *req.Status
+	if req.Phone != "" {
+		updateMap["phone"] = req.Phone
+	}
+	if req.Email != "" {
+		updateMap["email"] = req.Email
 	}
 
-	if err := h.repo.UpdateUser(user); err != nil {
-		api.InternalError(c, "更新用户失败")
+	if err := h.service.UpdateProfile(c.Request.Context(), uint(id), updateMap); err != nil {
+		api.HandleError(c, err)
 		return
 	}
 
-	user.Password = ""
-	api.SuccessWithMessage(c, "用户更新成功", user)
+	api.SuccessWithMessage(c, "用户更新成功", nil)
 }
 
 // DeleteUser deletes a user
@@ -264,12 +211,95 @@ func (h *Handler) DeleteUser(c *gin.Context) {
 		return
 	}
 
-	if err := h.repo.DeleteUser(uint(id)); err != nil {
-		api.InternalError(c, "删除用户失败")
+	if err := h.service.DeleteUser(c.Request.Context(), uint(id)); err != nil {
+		api.HandleError(c, err)
 		return
 	}
 
 	api.SuccessWithMessage(c, "用户删除成功", nil)
+}
+
+// BanUser bans a user
+func (h *Handler) BanUser(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		api.BadRequest(c, "无效的用户ID")
+		return
+	}
+
+	if err := h.service.BanUser(c.Request.Context(), uint(id)); err != nil {
+		api.HandleError(c, err)
+		return
+	}
+
+	api.SuccessWithMessage(c, "用户已封禁", nil)
+}
+
+// UnbanUser unbans a user
+func (h *Handler) UnbanUser(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		api.BadRequest(c, "无效的用户ID")
+		return
+	}
+
+	if err := h.service.UnbanUser(c.Request.Context(), uint(id)); err != nil {
+		api.HandleError(c, err)
+		return
+	}
+
+	api.SuccessWithMessage(c, "用户已解封", nil)
+}
+
+// CheckUsernameRequest represents the request to check username availability
+type CheckUsernameRequest struct {
+	Username string `json:"username" binding:"required"`
+}
+
+// CheckUsername checks if a username is available
+func (h *Handler) CheckUsername(c *gin.Context) {
+	var req CheckUsernameRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		api.ValidationError(c, err)
+		return
+	}
+
+	available, err := h.service.CheckUsername(c.Request.Context(), req.Username)
+	if err != nil {
+		api.HandleError(c, err)
+		return
+	}
+
+	api.Success(c, gin.H{
+		"username":  req.Username,
+		"available": available,
+	})
+}
+
+// ResetPasswordRequest represents the request to reset password
+type ResetPasswordRequest struct {
+	Email string `json:"email" binding:"required,email"`
+}
+
+// ResetPassword sends a password reset email
+func (h *Handler) ResetPassword(c *gin.Context) {
+	var req ResetPasswordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		api.ValidationError(c, err)
+		return
+	}
+
+	newPassword, err := h.service.ResetPassword(c.Request.Context(), req.Email)
+	if err != nil {
+		api.HandleError(c, err)
+		return
+	}
+
+	// In production, send email instead
+	api.SuccessWithMessage(c, "密码已重置", gin.H{
+		"new_password": newPassword,
+		"message":      "生产环境应通过邮件发送",
+	})
 }
 
 // GetProfile retrieves a user's profile
@@ -280,21 +310,21 @@ func (h *Handler) GetProfile(c *gin.Context) {
 		return
 	}
 
-	profile, err := h.repo.GetProfileByUserID(uint(id))
+	user, err := h.service.GetProfile(c.Request.Context(), uint(id))
 	if err != nil {
-		api.NotFound(c, "用户资料不存在")
+		api.HandleError(c, err)
 		return
 	}
 
-	api.Success(c, profile)
+	api.Success(c, user)
 }
 
 // UpdateProfileRequest represents the request to update a profile
 type UpdateProfileRequest struct {
-	Gender   string     `json:"gender" binding:"omitempty,max=10"`
-	Birthday *string   `json:"birthday" binding:"omitempty"`
-	Location string     `json:"location" binding:"omitempty,max=100"`
-	Bio      string     `json:"bio" binding:"omitempty,max=500"`
+	Nickname string `json:"nickname" binding:"omitempty,max=50"`
+	Avatar   string `json:"avatar" binding:"omitempty,max=255"`
+	Phone    string `json:"phone" binding:"omitempty,max=20"`
+	Email    string `json:"email" binding:"omitempty,email,max=100"`
 }
 
 // UpdateProfile updates a user's profile
@@ -311,136 +341,60 @@ func (h *Handler) UpdateProfile(c *gin.Context) {
 		return
 	}
 
-	profile, err := h.repo.GetProfileByUserID(uint(id))
-	if err != nil {
-		// Create profile if not exists
-		profile = &UserProfile{UserID: uint(id)}
+	// Convert to map for UpdateProfile
+	updateMap := make(map[string]interface{})
+	if req.Nickname != "" {
+		updateMap["nickname"] = req.Nickname
+	}
+	if req.Avatar != "" {
+		updateMap["avatar"] = req.Avatar
+	}
+	if req.Phone != "" {
+		updateMap["phone"] = req.Phone
+	}
+	if req.Email != "" {
+		updateMap["email"] = req.Email
 	}
 
-	if req.Gender != "" {
-		profile.Gender = req.Gender
-	}
-	if req.Location != "" {
-		profile.Location = req.Location
-	}
-	if req.Bio != "" {
-		profile.Bio = req.Bio
-	}
-
-	if err := h.repo.UpdateProfile(profile); err != nil {
-		api.InternalError(c, "更新资料失败")
+	if err := h.service.UpdateProfile(c.Request.Context(), uint(id), updateMap); err != nil {
+		api.HandleError(c, err)
 		return
 	}
 
-	api.SuccessWithMessage(c, "资料更新成功", profile)
+	api.SuccessWithMessage(c, "资料更新成功", nil)
 }
 
-// AddFriendRequest represents the request to add a friend
-type AddFriendRequest struct {
-	FriendID uint   `json:"friend_id" binding:"required"`
-	Remark   string `json:"remark" binding:"max=50"`
+// ChangePasswordRequest represents the request to change password
+type ChangePasswordRequest struct {
+	OldPassword string `json:"old_password" binding:"required"`
+	NewPassword string `json:"new_password" binding:"required,min=6"`
 }
 
-// AddFriend adds a friend
-func (h *Handler) AddFriend(c *gin.Context) {
-	// TODO: Get user ID from JWT token
-	userID := uint(1) // Placeholder
+// ChangePassword changes the user's password
+func (h *Handler) ChangePassword(c *gin.Context) {
+	userID := getUserID(c)
 
-	var req AddFriendRequest
+	var req ChangePasswordRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		api.ValidationError(c, err)
 		return
 	}
 
-	if req.FriendID == userID {
-		api.BadRequest(c, "不能添加自己为好友")
+	if err := h.service.ChangePassword(c.Request.Context(), userID, req.OldPassword, req.NewPassword); err != nil {
+		api.HandleError(c, err)
 		return
 	}
 
-	friend := &Friend{
-		UserID: userID,
-		FriendID: req.FriendID,
-		Status:  "pending",
-		Remark:  req.Remark,
-	}
-
-	if err := h.repo.CreateFriend(friend); err != nil {
-		api.InternalError(c, "添加好友失败")
-		return
-	}
-
-	api.SuccessWithMessage(c, "好友请求已发送", friend)
+	api.SuccessWithMessage(c, "密码修改成功", nil)
 }
 
-// GetFriends retrieves friends for the current user
-func (h *Handler) GetFriends(c *gin.Context) {
-	// TODO: Get user ID from JWT token
-	userID := uint(1) // Placeholder
-
-	status := c.Query("status")
-
-	friends, err := h.repo.GetFriends(userID, status)
-	if err != nil {
-		api.InternalError(c, "获取好友列表失败")
-		return
+// getUserID gets the user ID from context (JWT token)
+func getUserID(c *gin.Context) uint {
+	// TODO: Get from JWT token
+	if userID, exists := c.Get("user_id"); exists {
+		if id, ok := userID.(uint); ok {
+			return id
+		}
 	}
-
-	api.Success(c, friends)
-}
-
-// UpdateFriendRequest represents the request to update a friend
-type UpdateFriendRequest struct {
-	Status string `json:"status" binding:"required,oneof=accepted blocked"`
-	Remark string `json:"remark" binding:"max=50"`
-}
-
-// UpdateFriend updates a friend relationship
-func (h *Handler) UpdateFriend(c *gin.Context) {
-	friendID, err := strconv.ParseUint(c.Param("friend_id"), 10, 32)
-	if err != nil {
-		api.BadRequest(c, "无效的好友ID")
-		return
-	}
-
-	// TODO: Get user ID from JWT token
-	userID := uint(1) // Placeholder
-
-	var req UpdateFriendRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		api.ValidationError(c, err)
-		return
-	}
-
-	friend := &Friend{
-		UserID:   userID,
-		FriendID: uint(friendID),
-		Status:   req.Status,
-		Remark:   req.Remark,
-	}
-
-	if err := h.repo.UpdateFriend(friend); err != nil {
-		api.InternalError(c, "更新好友关系失败")
-		return
-	}
-
-	api.SuccessWithMessage(c, "好友关系更新成功", friend)
-}
-
-// DeleteFriend deletes a friend
-func (h *Handler) DeleteFriend(c *gin.Context) {
-	friendID, err := strconv.ParseUint(c.Param("friend_id"), 10, 32)
-	if err != nil {
-		api.BadRequest(c, "无效的好友ID")
-		return
-	}
-
-	// TODO: Get user ID from JWT token
-	userID := uint(1) // Placeholder
-
-	if err := h.repo.DeleteFriend(userID, uint(friendID)); err != nil {
-		api.InternalError(c, "删除好友失败")
-		return
-	}
-
-	api.SuccessWithMessage(c, "好友删除成功", nil)
+	return 1 // Default for testing
 }

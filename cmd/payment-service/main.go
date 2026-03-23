@@ -27,9 +27,13 @@ func main() {
 		&payment.ScoreLog{},
 	)
 
-	repo := payment.NewRepository(database.DB)
+	// Initialize layers (Repository -> Service -> Handler)
+	orderRepo := payment.NewOrderRepositoryImpl(database.DB)
+	scoreRepo := payment.NewScoreRepositoryImpl(database.DB)
+	service := payment.NewService(orderRepo, scoreRepo)
+
 	srv := server.New(cfg)
-	handler := payment.NewHandler(repo)
+	handler := payment.NewHandler(service)
 	srv.RegisterRoutes(handler.RegisterRoutes)
 
 	go func() {

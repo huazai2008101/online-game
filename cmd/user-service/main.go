@@ -33,14 +33,15 @@ func main() {
 		log.Fatalf("Failed to migrate database: %v", err)
 	}
 
-	// Initialize repository
+	// Initialize layers (Repository -> Service -> Handler)
 	repo := user.NewRepository(database.DB)
+	service := user.NewService(repo)
+	handler := user.NewHandler(service)
 
 	// Create server
 	srv := server.New(cfg)
 
 	// Register routes
-	handler := user.NewHandler(repo)
 	srv.RegisterRoutes(handler.RegisterRoutes)
 
 	// Start server in a goroutine

@@ -5,21 +5,18 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"online-game/pkg/actor"
 	"online-game/pkg/api"
 )
 
 // Handler handles HTTP requests for the game service
 type Handler struct {
-	repo *Repository
-	mgr  *GameInstanceManager
+	service *Service
 }
 
 // NewHandler creates a new handler
-func NewHandler(repo *Repository, mgr *GameInstanceManager) *Handler {
+func NewHandler(service *Service) *Handler {
 	return &Handler{
-		repo: repo,
-		mgr:  mgr,
+		service: service,
 	}
 }
 
@@ -46,6 +43,7 @@ func (h *Handler) RegisterRoutes(r *gin.RouterGroup) {
 		games.POST("/:id/start", h.StartGame)
 		games.POST("/:id/stop", h.StopGame)
 		games.GET("/:id/status", h.GetGameStatus)
+		games.POST("/:id/action", h.PlayerAction)
 	}
 
 	rooms := r.Group("/rooms")
@@ -92,16 +90,15 @@ func (h *Handler) CreateGame(c *gin.Context) {
 		return
 	}
 
-	game := &Game{
-		OrgID:    req.OrgID,
-		GameCode: req.GameCode,
-		GameName: req.GameName,
-		GameType: req.GameType,
-		Status:   1,
-	}
-
-	if err := h.repo.CreateGame(game); err != nil {
-		api.InternalError(c, "创建游戏失败")
+	game, err := h.service.CreateGame(c.Request.Context(), &CreateGameRequest{
+		OrgID:       req.OrgID,
+		GameCode:    req.GameCode,
+		GameName:    req.GameName,
+		GameType:    req.GameType,
+		Description: req.Description,
+	})
+	if err != nil {
+		api.HandleError(c, err)
 		return
 	}
 
@@ -117,9 +114,9 @@ func (h *Handler) ListGames(c *gin.Context) {
 
 	orgID, _ := strconv.ParseInt(c.Query("org_id"), 10, 64)
 
-	games, total, err := h.repo.ListGames(orgID, params.GetOffset(), params.PerPage)
+	games, total, err := h.service.ListGames(c.Request.Context(), orgID, params.Page, params.PerPage)
 	if err != nil {
-		api.InternalError(c, "获取游戏列表失败")
+		api.HandleError(c, err)
 		return
 	}
 
@@ -134,9 +131,9 @@ func (h *Handler) GetGame(c *gin.Context) {
 		return
 	}
 
-	game, err := h.repo.GetGameByID(uint(id))
+	game, err := h.service.GetGame(c.Request.Context(), uint(id))
 	if err != nil {
-		api.NotFound(c, "游戏不存在")
+		api.HandleError(c, err)
 		return
 	}
 
@@ -157,34 +154,12 @@ func (h *Handler) UpdateGame(c *gin.Context) {
 		return
 	}
 
-	game, err := h.repo.GetGameByID(uint(id))
-	if err != nil {
-		api.NotFound(c, "游戏不存在")
+	if err := h.service.UpdateGame(c.Request.Context(), uint(id), &req); err != nil {
+		api.HandleError(c, err)
 		return
 	}
 
-	if req.GameName != "" {
-		game.GameName = req.GameName
-	}
-	if req.GameType != "" {
-		game.GameType = req.GameType
-	}
-	if req.GameIcon != "" {
-		game.GameIcon = req.GameIcon
-	}
-	if req.GameCover != "" {
-		game.GameCover = req.GameCover
-	}
-	if req.Status != nil {
-		game.Status = *req.Status
-	}
-
-	if err := h.repo.UpdateGame(game); err != nil {
-		api.InternalError(c, "更新游戏失败")
-		return
-	}
-
-	api.SuccessWithMessage(c, "游戏更新成功", game)
+	api.SuccessWithMessage(c, "游戏更新成功", nil)
 }
 
 // DeleteGame deletes a game
@@ -195,12 +170,17 @@ func (h *Handler) DeleteGame(c *gin.Context) {
 		return
 	}
 
-	if err := h.repo.DeleteGame(uint(id)); err != nil {
-		api.InternalError(c, "删除游戏失败")
+	if err := h.service.DeleteGame(c.Request.Context(), uint(id)); err != nil {
+		api.HandleError(c, err)
 		return
 	}
 
 	api.SuccessWithMessage(c, "游戏删除成功", nil)
+}
+
+// UpdateGameConfigRequest represents the request to update game config
+type UpdateGameConfigRequest struct {
+	Config map[string]interface{} `json:"config"`
 }
 
 // UpdateGameConfig updates game configuration
@@ -211,28 +191,18 @@ func (h *Handler) UpdateGameConfig(c *gin.Context) {
 		return
 	}
 
-	var config map[string]interface{}
-	if err := c.ShouldBindJSON(&config); err != nil {
+	var req UpdateGameConfigRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
 		api.ValidationError(c, err)
 		return
 	}
 
-	game, err := h.repo.GetGameByID(uint(id))
-	if err != nil {
-		api.NotFound(c, "游戏不存在")
+	if err := h.service.UpdateGameConfig(c.Request.Context(), uint(id), req.Config); err != nil {
+		api.HandleError(c, err)
 		return
 	}
 
-	// In a real implementation, we'd serialize the config to JSON
-	// For now, just store it as a string
-	game.GameConfig = "config_updated"
-
-	if err := h.repo.UpdateGame(game); err != nil {
-		api.InternalError(c, "更新配置失败")
-		return
-	}
-
-	api.SuccessWithMessage(c, "配置更新成功", game)
+	api.SuccessWithMessage(c, "配置更新成功", nil)
 }
 
 // GetGameConfig retrieves game configuration
@@ -243,17 +213,13 @@ func (h *Handler) GetGameConfig(c *gin.Context) {
 		return
 	}
 
-	game, err := h.repo.GetGameByID(uint(id))
+	config, err := h.service.GetGameConfig(c.Request.Context(), uint(id))
 	if err != nil {
-		api.NotFound(c, "游戏不存在")
+		api.HandleError(c, err)
 		return
 	}
 
-	// Return the config
-	api.Success(c, gin.H{
-		"game_id": game.ID,
-		"config":   game.GameConfig,
-	})
+	api.Success(c, config)
 }
 
 // CreateGameVersionRequest represents the request to create a game version
@@ -279,17 +245,12 @@ func (h *Handler) CreateGameVersion(c *gin.Context) {
 		return
 	}
 
-	version := &GameVersion{
-		GameID:      uint(id),
-		Version:     req.Version,
-		ScriptType:  req.ScriptType,
-		ScriptPath:  req.ScriptPath,
-		ScriptHash:  req.ScriptHash,
-		Description: req.Description,
-	}
+	// Use gameID from path parameter
+	req.GameID = uint(id)
 
-	if err := h.repo.db.Create(version).Error; err != nil {
-		api.InternalError(c, "创建版本失败")
+	version, err := h.service.CreateGameVersion(c.Request.Context(), &req)
+	if err != nil {
+		api.HandleError(c, err)
 		return
 	}
 
@@ -304,24 +265,20 @@ func (h *Handler) ListGameVersions(c *gin.Context) {
 		return
 	}
 
-	var versions []*GameVersion
-	err = h.repo.db.Where("game_id = ?", uint(id)).
-		Order("created_at DESC").
-		Find(&versions).Error
-
+	versions, err := h.service.ListGameVersions(c.Request.Context(), uint(id))
 	if err != nil {
-		api.InternalError(c, "获取版本列表失败")
+		api.HandleError(c, err)
 		return
 	}
 
-	api.Success(c, versions)
+	api.Success(c, gin.H{"versions": versions})
 }
 
 // StartGameRequest represents the request to start a game
 type StartGameRequest struct {
-	RoomID   string        `json:"room_id" binding:"required"`
-	Players  []string      `json:"players" binding:"required,min=1"`
-	Config   map[string]any `json:"config"`
+	RoomID  string                 `json:"room_id" binding:"required"`
+	Players []string               `json:"players" binding:"required,min=1"`
+	Config  map[string]interface{} `json:"config"`
 }
 
 // StartGame starts a game instance
@@ -338,43 +295,20 @@ func (h *Handler) StartGame(c *gin.Context) {
 		return
 	}
 
-	gameID := strconv.FormatUint(id, 10)
-
-	// Create game actor
-	gameActor, err := h.mgr.CreateGameActor(gameID, req.RoomID)
-	if err != nil {
-		api.InternalError(c, "创建游戏实例失败")
-		return
-	}
-
-	// Create engine
-	engine, err := h.mgr.GetGameEngine(gameID)
-	if err != nil {
-		api.InternalError(c, "创建游戏引擎失败")
-		return
-	}
-
-	// Send start message
-	gameActor.Send(&actor.GameStartMessage{
-		GameID:    gameID,
-		RoomID:    req.RoomID,
-		Players:   req.Players,
-		Timestamp: 0,
+	session, err := h.service.StartGame(c.Request.Context(), uint(id), &StartGameRequest{
+		RoomID:  req.RoomID,
+		Players: req.Players,
+		Config:  req.Config,
 	})
-
-	// Create session
-	session := &GameSession{
-		RoomID:    req.RoomID,
-		GameID:    uint(id),
-		Status:    "running",
+	if err != nil {
+		api.HandleError(c, err)
+		return
 	}
-
-	_ = h.repo.CreateSession(session)
 
 	api.SuccessWithMessage(c, "游戏已启动", gin.H{
-		"room_id":   req.RoomID,
+		"room_id":    req.RoomID,
 		"session_id": session.ID,
-		"engine":    engine.CurrentEngine(),
+		"status":     session.Status,
 	})
 }
 
@@ -398,11 +332,8 @@ func (h *Handler) StopGame(c *gin.Context) {
 		return
 	}
 
-	gameID := strconv.FormatUint(id, 10)
-
-	// Stop game actor
-	if err := h.mgr.StopGameActor(gameID, req.RoomID); err != nil {
-		api.InternalError(c, "停止游戏失败")
+	if err := h.service.StopGame(c.Request.Context(), uint(id), req.RoomID, req.Reason); err != nil {
+		api.HandleError(c, err)
 		return
 	}
 
@@ -423,32 +354,52 @@ func (h *Handler) GetGameStatus(c *gin.Context) {
 		return
 	}
 
-	gameID := strconv.FormatUint(id, 10)
-
-	actor, err := h.mgr.GetGameActor(gameID, roomID)
+	status, err := h.service.GetGameStatus(c.Request.Context(), uint(id), roomID)
 	if err != nil {
-		api.NotFound(c, "游戏实例不存在")
+		api.HandleError(c, err)
 		return
 	}
 
-	stats := actor.Stats()
+	api.Success(c, status)
+}
 
-	api.Success(c, gin.H{
-		"game_id":         gameID,
-		"room_id":         roomID,
-		"is_running":      actor.IsRunning(),
-		"player_count":    actor.GetPlayerCount(),
-		"messages_processed": stats.MessageCount,
-	})
+// PlayerActionRequest represents a player action
+type PlayerActionRequest struct {
+	RoomID   string                 `json:"room_id" binding:"required"`
+	PlayerID string                 `json:"player_id" binding:"required"`
+	Action   string                 `json:"action" binding:"required"`
+	Data     map[string]interface{} `json:"data"`
+}
+
+// PlayerAction sends a player action to the game
+func (h *Handler) PlayerAction(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		api.BadRequest(c, "无效的游戏ID")
+		return
+	}
+
+	var req PlayerActionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		api.ValidationError(c, err)
+		return
+	}
+
+	if err := h.service.PlayerAction(c.Request.Context(), uint(id), req.RoomID, req.PlayerID, req.Action, req.Data); err != nil {
+		api.HandleError(c, err)
+		return
+	}
+
+	api.SuccessWithMessage(c, "操作已执行", nil)
 }
 
 // CreateRoomRequest represents the request to create a room
 type CreateRoomRequest struct {
-	RoomID    string        `json:"room_id" binding:"required,min=1,max=50"`
-	GameID    uint          `json:"game_id" binding:"required"`
-	RoomName  string        `json:"room_name" binding:"required,min=1,max=100"`
-	MaxPlayers int          `json:"max_players" binding:"min=2,max=100"`
-	Config    map[string]any `json:"config"`
+	RoomID     string                 `json:"room_id" binding:"required,min=1,max=50"`
+	GameID     uint                   `json:"game_id" binding:"required"`
+	RoomName   string                 `json:"room_name" binding:"required,min=1,max=100"`
+	MaxPlayers int                    `json:"max_players" binding:"min=2,max=100"`
+	Config     map[string]interface{} `json:"config"`
 }
 
 // CreateRoom creates a new game room
@@ -459,23 +410,17 @@ func (h *Handler) CreateRoom(c *gin.Context) {
 		return
 	}
 
-	room := &GameRoom{
+	room, err := h.service.CreateRoom(c.Request.Context(), &CreateRoomRequest{
 		RoomID:     req.RoomID,
 		GameID:     req.GameID,
 		RoomName:   req.RoomName,
 		MaxPlayers: req.MaxPlayers,
-		Status:     "waiting",
-	}
-
-	if err := h.repo.CreateRoom(room); err != nil {
-		api.InternalError(c, "创建房间失败")
+		Config:     req.Config,
+	})
+	if err != nil {
+		api.HandleError(c, err)
 		return
 	}
-
-	// Create room actor
-	roomActor := actor.NewRoomActor(req.RoomID, strconv.FormatUint(uint64(req.GameID), 10), req.MaxPlayers)
-	h.mgr.actorSystem.Register(roomActor)
-	roomActor.Start(c)
 
 	api.SuccessWithMessage(c, "房间创建成功", room)
 }
@@ -490,9 +435,9 @@ func (h *Handler) ListRooms(c *gin.Context) {
 	gameID, _ := strconv.ParseUint(c.Query("game_id"), 10, 32)
 	status := c.Query("status")
 
-	rooms, total, err := h.repo.ListRooms(uint(gameID), status, params.GetOffset(), params.PerPage)
+	rooms, total, err := h.service.ListRooms(c.Request.Context(), uint(gameID), status, params.Page, params.PerPage)
 	if err != nil {
-		api.InternalError(c, "获取房间列表失败")
+		api.HandleError(c, err)
 		return
 	}
 
@@ -507,13 +452,20 @@ func (h *Handler) GetRoom(c *gin.Context) {
 		return
 	}
 
-	room, err := h.repo.GetRoomByID(uint(id))
+	room, err := h.service.GetRoom(c.Request.Context(), uint(id))
 	if err != nil {
-		api.NotFound(c, "房间不存在")
+		api.HandleError(c, err)
 		return
 	}
 
 	api.Success(c, room)
+}
+
+// UpdateRoomRequest represents the request to update a room
+type UpdateRoomRequest struct {
+	Status     *int                    `json:"status"`
+	MaxPlayers *int                    `json:"max_players" binding:"omitempty,min=2,max=100"`
+	Config     map[string]interface{}  `json:"config"`
 }
 
 // UpdateRoom updates a room
@@ -524,24 +476,29 @@ func (h *Handler) UpdateRoom(c *gin.Context) {
 		return
 	}
 
-	var req map[string]interface{}
+	var req UpdateRoomRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		api.ValidationError(c, err)
 		return
 	}
 
-	room, err := h.repo.GetRoomByID(uint(id))
-	if err != nil {
-		api.NotFound(c, "房间不存在")
+	updates := make(map[string]interface{})
+	if req.Status != nil {
+		updates["status"] = *req.Status
+	}
+	if req.MaxPlayers != nil {
+		updates["max_players"] = *req.MaxPlayers
+	}
+	if req.Config != nil {
+		updates["config"] = req.Config
+	}
+
+	if err := h.service.UpdateRoom(c.Request.Context(), uint(id), updates); err != nil {
+		api.HandleError(c, err)
 		return
 	}
 
-	if err := h.repo.UpdateRoom(room); err != nil {
-		api.InternalError(c, "更新房间失败")
-		return
-	}
-
-	api.SuccessWithMessage(c, "房间更新成功", room)
+	api.SuccessWithMessage(c, "房间更新成功", nil)
 }
 
 // CloseRoom closes a room
@@ -552,19 +509,12 @@ func (h *Handler) CloseRoom(c *gin.Context) {
 		return
 	}
 
-	room, err := h.repo.GetRoomByID(uint(id))
-	if err != nil {
-		api.NotFound(c, "房间不存在")
+	if err := h.service.CloseRoom(c.Request.Context(), uint(id)); err != nil {
+		api.HandleError(c, err)
 		return
 	}
 
-	room.Status = "closed"
-	if err := h.repo.UpdateRoom(room); err != nil {
-		api.InternalError(c, "关闭房间失败")
-		return
-	}
-
-	api.SuccessWithMessage(c, "房间已关闭", room)
+	api.SuccessWithMessage(c, "房间已关闭", nil)
 }
 
 // JoinRoomRequest represents the request to join a room
@@ -586,24 +536,19 @@ func (h *Handler) JoinRoom(c *gin.Context) {
 		return
 	}
 
-	room, err := h.repo.GetRoomByID(uint(id))
+	// Get room ID from the room itself
+	room, err := h.service.GetRoom(c.Request.Context(), uint(id))
 	if err != nil {
-		api.NotFound(c, "房间不存在")
+		api.HandleError(c, err)
 		return
 	}
 
-	if room.PlayerCount >= room.MaxPlayers {
-		api.BadRequest(c, "房间已满")
+	if err := h.service.JoinRoom(c.Request.Context(), room.RoomID, req.PlayerID); err != nil {
+		api.HandleError(c, err)
 		return
 	}
 
-	room.PlayerCount++
-	if err := h.repo.UpdateRoom(room); err != nil {
-		api.InternalError(c, "加入房间失败")
-		return
-	}
-
-	api.SuccessWithMessage(c, "已加入房间", room)
+	api.SuccessWithMessage(c, "已加入房间", nil)
 }
 
 // LeaveRoomRequest represents the request to leave a room
@@ -625,21 +570,19 @@ func (h *Handler) LeaveRoom(c *gin.Context) {
 		return
 	}
 
-	room, err := h.repo.GetRoomByID(uint(id))
+	// Get room ID from the room itself
+	room, err := h.service.GetRoom(c.Request.Context(), uint(id))
 	if err != nil {
-		api.NotFound(c, "房间不存在")
+		api.HandleError(c, err)
 		return
 	}
 
-	if room.PlayerCount > 0 {
-		room.PlayerCount--
-		if err := h.repo.UpdateRoom(room); err != nil {
-			api.InternalError(c, "离开房间失败")
-			return
-		}
+	if err := h.service.LeaveRoom(c.Request.Context(), room.RoomID, req.PlayerID); err != nil {
+		api.HandleError(c, err)
+		return
 	}
 
-	api.SuccessWithMessage(c, "已离开房间", room)
+	api.SuccessWithMessage(c, "已离开房间", nil)
 }
 
 // GetSession retrieves a session by ID
@@ -650,9 +593,9 @@ func (h *Handler) GetSession(c *gin.Context) {
 		return
 	}
 
-	session, err := h.repo.GetSessionByID(uint(id))
+	session, err := h.service.GetSession(c.Request.Context(), uint(id))
 	if err != nil {
-		api.NotFound(c, "会话不存在")
+		api.HandleError(c, err)
 		return
 	}
 
@@ -667,16 +610,11 @@ func (h *Handler) GetSessionState(c *gin.Context) {
 		return
 	}
 
-	session, err := h.repo.GetSessionByID(uint(id))
+	state, err := h.service.GetSessionState(c.Request.Context(), uint(id))
 	if err != nil {
-		api.NotFound(c, "会话不存在")
+		api.HandleError(c, err)
 		return
 	}
 
-	// Return the final state
-	api.Success(c, gin.H{
-		"session_id": session.ID,
-		"status":     session.Status,
-		"state":      session.FinalState,
-	})
+	api.Success(c, state)
 }

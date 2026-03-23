@@ -33,16 +33,18 @@ func main() {
 		log.Fatalf("Failed to migrate database: %v", err)
 	}
 
-	// Initialize repository and manager
-	repo := game.NewRepository(database.DB)
+	// Initialize layers (Repository -> Manager -> Service -> Handler)
+	repo := game.NewRepositoryImpl(database.DB)
 	mgr := game.NewGameInstanceManager(database.DB)
 	defer mgr.Shutdown()
+
+	service := game.NewService(repo, mgr)
 
 	// Create server
 	srv := server.New(cfg)
 
 	// Register routes
-	handler := game.NewHandler(repo, mgr)
+	handler := game.NewHandler(service)
 	srv.RegisterRoutes(handler.RegisterRoutes)
 
 	// Start server in a goroutine

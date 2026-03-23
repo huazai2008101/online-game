@@ -1,16 +1,18 @@
 package user
 
 import (
+	"context"
 	"gorm.io/gorm"
 )
 
 // Repository provides database operations for users
+// It implements the UserRepository interface
 type Repository struct {
 	db *gorm.DB
 }
 
 // NewRepository creates a new repository
-func NewRepository(db *gorm.DB) *Repository {
+func NewRepository(db *gorm.DB) UserRepository {
 	return &Repository{db: db}
 }
 
