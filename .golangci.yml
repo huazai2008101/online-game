@@ -1,0 +1,206 @@
+# golangci-lint 配置文件
+# Author: online-game team
+# Description: 代码质量检查规则
+
+run:
+  # 并发数
+  concurrency: 4
+  # 超时时间
+  timeout: 5m
+  # 跳过目录
+  skip-dirs:
+    - vendor
+    - third_party
+    - build
+    - dist
+    - .git
+  # 跳过文件
+  skip-files:
+    - ".*\\.pb\\.go$"
+    - ".*\\.gen\\.go$"
+  # 构建标签
+  build-tags:
+    - integration
+  # 使用 Go modules
+  modules-download-mode: readonly
+
+output:
+  # 输出格式: colored-line-number|line-number|json|tab|checkstyle|code-climate
+  formats:
+    - format: colored-line-number
+  # 打印检查的 linters
+  print-linter-name: true
+  # 排序结果
+  sort-results: true
+
+linters:
+  # 启用的 linters
+  enable:
+    - gofmt          # 代码格式化检查
+    - goimports      # import 排序
+    - govet          # go vet 检查
+    - errcheck       # 检查未处理的错误
+    - staticcheck    # 静态分析
+    - unused         # 检查未使用的代码
+    - structcheck    # 检查未使用的结构体字段
+    - varcheck       # 检查未使用的全局变量和常量
+    - typecheck      # 类型检查
+    - ineffassign    # 检查无效的赋值
+    - deadcode       # 检查未使用的代码
+    - gosimple       # 简化代码建议
+    - goconst        # 检查可以定义为常量的字符串
+    - unconvert      # 检查不必要的类型转换
+    - misspell       # 拼写检查
+    - gocritic       # 代码风格检查
+    - gosec          # 安全检查
+    - gocyclo        # 圈复杂度检查
+    - dupl           # 重复代码检查
+    - goerr113       # 错误处理检查
+    - errorlint      # 错误类型检查
+    - nilerr         # 检查返回 nil 错误的情况
+    - noctx          # 检查缺少 context 的函数调用
+    - prealloc       # 检查可以预分配的 slice
+    - revive         # golint 替代品
+    - stylecheck     # 静态分析风格检查
+    - unparam        # 检查未使用的函数参数
+    - forbidigo      # 禁止特定函数
+    - makezero       # 检查 make 初始化
+    - nilnil         # 检查返回 nil, nil 的情况
+    - predeclared    # 检查与预声明标识符冲突
+
+  # 禁用的 linters
+  disable:
+    - exhaustivestruct  # 过于严格
+    - funlen            # 我们用 gocyclo
+    - wsl               # 不需要
+    - nlreturn          # 不需要
+    - testpackage       # 不强制
+
+linters-settings:
+  # 圈复杂度
+  gocyclo:
+    min-complexity: 15
+
+  # 重复代码
+  dupl:
+    threshold: 100
+
+  # gosec 安全检查
+  gosec:
+    excludes:
+      - G104  # 允许忽略某些错误
+      - G307  # defer 在文件关闭前检查
+
+  # govet 设置
+  govet:
+    check-shadowing: true
+    enable-all: true
+
+  # 错误检查
+  errcheck:
+    check-type-assertions: true
+    check-blank: false
+
+  # 静态检查
+  staticcheck:
+    checks: ["all"]
+
+  # 拼写检查
+  misspell:
+    locale: US
+
+  # revive 设置
+  revive:
+    confidence: 0.8
+    rules:
+      - name: blank-imports
+      - name: context-as-argument
+      - name: context-keys-type
+      - name: dot-imports
+      - name: error-return
+      - name: error-strings
+      - name: error-naming
+      - name: exported
+      - name: if-return
+      - name: increment-decrement
+      - name: var-naming
+      - name: var-declaration
+      - name: package-comments
+      - name: range
+      - name: receiver-naming
+      - name: time-naming
+      - name: unexported-return
+      - name: indent-error-flow
+      - name: errorf
+      - name: empty-block
+      - name: superfluous-else
+      - name: unused-parameter
+      - name: unreachable-code
+      - name: redefines-builtin-id
+
+  # 禁止特定函数
+  forbidigo:
+    forbid:
+      - 'ioutil\.ReadAll'
+      - 'ioutil\.WriteFile'
+      - 'ioutil\.ReadDir'
+
+  # gocritic 设置
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - experimental
+      - opinionated
+      - performance
+      - style
+    disabled-checks:
+      - whyNoLint
+      - unnamedResult
+
+issues:
+  # 显示所有问题
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+  # 排除规则
+  exclude-rules:
+    # 排除测试文件的某些检查
+    - path: _test\.go
+      linters:
+        - gocyclo
+        - errcheck
+        - dupl
+        - gosec
+        - goconst
+
+    # 排除生成的文件
+    - path: .*\.pb\.go
+      linters:
+        - all
+
+    # 排除 main 函数中的 ctx 参数检查
+    - path: cmd/
+      linters:
+        - noctx
+
+  # 独立默认排除
+  exclude-use-default: false
+
+  # 排除特定问题
+  exclude:
+    # 排除某些常见的误报
+    - 'G104: Errors unhandled'
+    - 'declaration of "err" shadows declaration at'
+
+severity:
+  # 默认严重级别
+  default-severity: error
+
+  # 规则覆盖
+  rules:
+    - linters:
+        - dupl
+      severity: warning
+    - linters:
+        - gocyclo
+      severity: warning

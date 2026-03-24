@@ -14,25 +14,89 @@ Most endpoints require authentication via Bearer token:
 Authorization: Bearer <token>
 ```
 
-## Common Response Format
+## Response Format
 
+### Success Response (HTTP 200)
+
+**HTTP Status:** `200 OK`
+
+**Headers:**
+```
+Content-Type: application/json
+```
+
+**Body:**
 ```json
 {
-    "code": 0,
-    "message": "success",
-    "data": { ... }
+    "user_id": 1000001,
+    "username": "player1",
+    "nickname": "Player One",
+    ...
 }
 ```
 
-Error response:
+### Error Response (Non-200)
+
+**HTTP Status:** `Error Code` (e.g., 400, 401, 404, 500, etc.)
+
+**Headers:**
+```
+X-Error-Message: Invalid parameter: username is required
+```
+
+**Body:** 空 或 可选的调试信息
+
+```
+(空body)
+```
+
+或包含调试信息（开发环境）：
 
 ```json
 {
-    "code": 40001,
-    "message": "Invalid parameter",
-    "data": null
+    "field": "username",
+    "reason": "required",
+    "request_id": "req_123456"
 }
 ```
+
+### Design Principles
+
+1. **HTTP 200**: 请求成功，Body包含业务数据
+2. **Non-200**: 请求失败，HTTP状态码即错误码
+3. **X-Error-Message Header**: 失败时返回可读的错误信息（客户端主要读取这个）
+4. **Body**: 成功时返回业务数据，失败时为空或可选的调试信息
+
+---
+
+## HTTP Status Codes (Error Codes)
+
+| Code | Description | Example |
+|------|-------------|---------|
+| **200** | Success | Request completed successfully |
+| **400** | Bad Request | Invalid parameter, malformed request |
+| **401** | Unauthorized | Missing or invalid token |
+| **403** | Forbidden | Insufficient permissions |
+| **404** | Not Found | Resource does not exist |
+| **409** | Conflict | Resource already exists, state conflict |
+| **429** | Too Many Requests | Rate limit exceeded |
+| **500** | Internal Server Error | Unexpected server error |
+| **502** | Bad Gateway | Upstream service error |
+| **503** | Service Unavailable | Service temporarily unavailable |
+| **504** | Gateway Timeout | Upstream service timeout |
+
+### Common Error Scenarios
+
+| Scenario | Status Code | X-Error-Message Example |
+|----------|-------------|-------------------------|
+| 参数缺失 | 400 | `Required parameter 'username' is missing` |
+| 参数格式错误 | 400 | `Invalid email format` |
+| 用户不存在 | 404 | `User not found: user_id=1000001` |
+| Token过期 | 401 | `Token expired or invalid` |
+| 权限不足 | 403 | `Insufficient permission to access this resource` |
+| 资源已存在 | 409 | `Username already exists: player1` |
+| 超出限流 | 429 | `Rate limit exceeded: 100 requests per minute` |
+| 服务异常 | 500 | `Internal server error, please try again later` |
 
 ---
 
@@ -42,7 +106,7 @@ Error response:
 
 Check service health status.
 
-**Response:**
+**Response (200 OK):**
 ```json
 {
     "status": "healthy",
@@ -81,19 +145,23 @@ Register a new user.
 }
 ```
 
-**Response:**
+**Success Response (200 OK):**
 ```json
 {
-    "code": 0,
-    "message": "success",
-    "data": {
-        "user_id": 1000001,
-        "username": "player1",
-        "nickname": "Player One",
-        "created_at": "2026-03-23T12:00:00Z"
-    }
+    "user_id": 1000001,
+    "username": "player1",
+    "nickname": "Player One",
+    "created_at": "2026-03-23T12:00:00Z"
 }
 ```
+
+**Error Response (409 Conflict):**
+```
+HTTP/1.1 409 Conflict
+X-Error-Message: Username already exists: player1
+```
+
+---
 
 ### POST /users/login
 
@@ -107,18 +175,22 @@ User login.
 }
 ```
 
-**Response:**
+**Success Response (200 OK):**
 ```json
 {
-    "code": 0,
-    "message": "success",
-    "data": {
-        "user_id": 1000001,
-        "token": "eyJhbGciOiJIUzI1NiIs...",
-        "expires_at": "2026-03-24T12:00:00Z"
-    }
+    "user_id": 1000001,
+    "token": "eyJhbGciOiJIUzI1NiIs...",
+    "expires_at": "2026-03-24T12:00:00Z"
 }
 ```
+
+**Error Response (401 Unauthorized):**
+```
+HTTP/1.1 401 Unauthorized
+X-Error-Message: Invalid username or password
+```
+
+---
 
 ### GET /users/profile
 
@@ -129,21 +201,25 @@ Get user profile.
 Authorization: Bearer <token>
 ```
 
-**Response:**
+**Success Response (200 OK):**
 ```json
 {
-    "code": 0,
-    "message": "success",
-    "data": {
-        "user_id": 1000001,
-        "username": "player1",
-        "nickname": "Player One",
-        "avatar": "https://cdn.example.com/avatars/1000001.png",
-        "level": 10,
-        "exp": 15000
-    }
+    "user_id": 1000001,
+    "username": "player1",
+    "nickname": "Player One",
+    "avatar": "https://cdn.example.com/avatars/1000001.png",
+    "level": 10,
+    "exp": 15000
 }
 ```
+
+**Error Response (401 Unauthorized):**
+```
+HTTP/1.1 401 Unauthorized
+X-Error-Message: Token expired or invalid
+```
+
+---
 
 ### PUT /users/profile
 
@@ -163,6 +239,19 @@ Authorization: Bearer <token>
 }
 ```
 
+**Success Response (200 OK):**
+```json
+{
+    "user_id": 1000001,
+    "nickname": "New Nickname",
+    "avatar": "https://cdn.example.com/new-avatar.png",
+    "bio": "I love gaming!",
+    "updated_at": "2026-03-23T12:00:00Z"
+}
+```
+
+---
+
 ### GET /users/friends
 
 Get friends list.
@@ -176,27 +265,25 @@ Authorization: Bearer <token>
 - `page` (int): Page number (default: 1)
 - `limit` (int): Items per page (default: 20)
 
-**Response:**
+**Success Response (200 OK):**
 ```json
 {
-    "code": 0,
-    "message": "success",
-    "data": {
-        "total": 50,
-        "page": 1,
-        "limit": 20,
-        "friends": [
-            {
-                "user_id": 1000002,
-                "username": "player2",
-                "nickname": "Player Two",
-                "status": "online",
-                "remark": "My best friend"
-            }
-        ]
-    }
+    "total": 50,
+    "page": 1,
+    "limit": 20,
+    "friends": [
+        {
+            "user_id": 1000002,
+            "username": "player2",
+            "nickname": "Player Two",
+            "status": "online",
+            "remark": "My best friend"
+        }
+    ]
 }
 ```
+
+---
 
 ### POST /users/friends/request
 
@@ -215,6 +302,29 @@ Authorization: Bearer <token>
 }
 ```
 
+**Success Response (200 OK):**
+```json
+{
+    "request_id": "req_1234567890",
+    "from_user_id": 1000001,
+    "to_user_id": 1000002,
+    "status": "pending",
+    "created_at": "2026-03-23T12:00:00Z"
+}
+```
+
+**Error Response (404 Not Found):**
+```
+HTTP/1.1 404 Not Found
+X-Error-Message: User not found: user_id=1000002
+```
+
+**Error Response (409 Conflict):**
+```
+HTTP/1.1 409 Conflict
+X-Error-Message: Friend request already sent
+```
+
 ---
 
 ## Game Service (Port 8002)
@@ -228,49 +338,51 @@ List available games.
 - `limit` (int): Items per page
 - `type` (string): Filter by game type
 
-**Response:**
+**Success Response (200 OK):**
 ```json
 {
-    "code": 0,
-    "message": "success",
-    "data": {
-        "total": 10,
-        "games": [
-            {
-                "game_id": 1,
-                "game_code": "texas-holdem",
-                "game_name": "Texas Hold'em",
-                "game_type": "card",
-                "game_icon": "https://cdn.example.com/games/texas-holdem.png",
-                "game_cover": "https://cdn.example.com/covers/texas-holdem.jpg",
-                "min_players": 2,
-                "max_players": 10,
-                "status": "active"
-            }
-        ]
-    }
+    "total": 10,
+    "games": [
+        {
+            "game_id": 1,
+            "game_code": "texas-holdem",
+            "game_name": "Texas Hold'em",
+            "game_type": "card",
+            "game_icon": "https://cdn.example.com/games/texas-holdem.png",
+            "game_cover": "https://cdn.example.com/covers/texas-holdem.jpg",
+            "min_players": 2,
+            "max_players": 10,
+            "status": "active"
+        }
+    ]
 }
 ```
+
+---
 
 ### GET /games/{game_id}
 
 Get game details.
 
-**Response:**
+**Success Response (200 OK):**
 ```json
 {
-    "code": 0,
-    "message": "success",
-    "data": {
-        "game_id": 1,
-        "game_code": "texas-holdem",
-        "game_name": "Texas Hold'em",
-        "description": "Classic poker game",
-        "rules": { ... },
-        "config": { ... }
-    }
+    "game_id": 1,
+    "game_code": "texas-holdem",
+    "game_name": "Texas Hold'em",
+    "description": "Classic poker game",
+    "rules": { ... },
+    "config": { ... }
 }
 ```
+
+**Error Response (404 Not Found):**
+```
+HTTP/1.1 404 Not Found
+X-Error-Message: Game not found: game_id=999
+```
+
+---
 
 ### POST /games/rooms
 
@@ -295,23 +407,27 @@ Authorization: Bearer <token>
 }
 ```
 
-**Response:**
+**Success Response (200 OK):**
 ```json
 {
-    "code": 0,
-    "message": "success",
-    "data": {
-        "room_id": "room_1234567890",
-        "game_id": 1,
-        "room_name": "My Poker Room",
-        "host_id": 1000001,
-        "player_count": 1,
-        "max_players": 6,
-        "status": "waiting",
-        "created_at": "2026-03-23T12:00:00Z"
-    }
+    "room_id": "room_1234567890",
+    "game_id": 1,
+    "room_name": "My Poker Room",
+    "host_id": 1000001,
+    "player_count": 1,
+    "max_players": 6,
+    "status": "waiting",
+    "created_at": "2026-03-23T12:00:00Z"
 }
 ```
+
+**Error Response (400 Bad Request):**
+```
+HTTP/1.1 400 Bad Request
+X-Error-Message: Invalid max_players: must be between 2 and 10
+```
+
+---
 
 ### POST /games/rooms/{room_id}/join
 
@@ -329,6 +445,29 @@ Authorization: Bearer <token>
 }
 ```
 
+**Success Response (200 OK):**
+```json
+{
+    "room_id": "room_1234567890",
+    "player_id": 1000001,
+    "joined_at": "2026-03-23T12:00:00Z"
+}
+```
+
+**Error Response (403 Forbidden):**
+```
+HTTP/1.1 403 Forbidden
+X-Error-Message: Room is full
+```
+
+**Error Response (401 Unauthorized):**
+```
+HTTP/1.1 401 Unauthorized
+X-Error-Message: Invalid room password
+```
+
+---
+
 ### POST /games/rooms/{room_id}/leave
 
 Leave a game room.
@@ -338,6 +477,17 @@ Leave a game room.
 Authorization: Bearer <token>
 ```
 
+**Success Response (200 OK):**
+```json
+{
+    "room_id": "room_1234567890",
+    "player_id": 1000001,
+    "left_at": "2026-03-23T12:00:00Z"
+}
+```
+
+---
+
 ### POST /games/rooms/{room_id}/start
 
 Start a game (host only).
@@ -346,6 +496,24 @@ Start a game (host only).
 ```
 Authorization: Bearer <token>
 ```
+
+**Success Response (200 OK):**
+```json
+{
+    "room_id": "room_1234567890",
+    "game_id": 1,
+    "status": "playing",
+    "started_at": "2026-03-23T12:00:00Z"
+}
+```
+
+**Error Response (403 Forbidden):**
+```
+HTTP/1.1 403 Forbidden
+X-Error-Message: Only host can start the game
+```
+
+---
 
 ### POST /games/rooms/{room_id}/action
 
@@ -366,6 +534,23 @@ Authorization: Bearer <token>
 }
 ```
 
+**Success Response (200 OK):**
+```json
+{
+    "action_id": "act_1234567890",
+    "player_id": 1000001,
+    "action": "bet",
+    "amount": 100,
+    "processed_at": "2026-03-23T12:00:00Z"
+}
+```
+
+**Error Response (400 Bad Request):**
+```
+HTTP/1.1 400 Bad Request
+X-Error-Message: Invalid action: not your turn
+```
+
 ---
 
 ## Payment Service (Port 8003)
@@ -379,18 +564,16 @@ Get user score balance.
 Authorization: Bearer <token>
 ```
 
-**Response:**
+**Success Response (200 OK):**
 ```json
 {
-    "code": 0,
-    "message": "success",
-    "data": {
-        "user_id": 1000001,
-        "balance": 50000,
-        "currency": "coins"
-    }
+    "user_id": 1000001,
+    "balance": 50000,
+    "currency": "coins"
 }
 ```
+
+---
 
 ### POST /orders
 
@@ -411,20 +594,18 @@ Authorization: Bearer <token>
 }
 ```
 
-**Response:**
+**Success Response (200 OK):**
 ```json
 {
-    "code": 0,
-    "message": "success",
-    "data": {
-        "order_no": "ORD20260323120000ABC",
-        "amount": 9900,
-        "currency": "USD",
-        "status": "pending",
-        "payment_url": "https://payment.example.com/..."
-    }
+    "order_no": "ORD20260323120000ABC",
+    "amount": 9900,
+    "currency": "USD",
+    "status": "pending",
+    "payment_url": "https://payment.example.com/..."
 }
 ```
+
+---
 
 ### GET /orders/{order_no}
 
@@ -435,21 +616,23 @@ Get order status.
 Authorization: Bearer <token>
 ```
 
-**Response:**
+**Success Response (200 OK):**
 ```json
 {
-    "code": 0,
-    "message": "success",
-    "data": {
-        "order_no": "ORD20260323120000ABC",
-        "product_type": "coin_package",
-        "product_id": "pkg_1000",
-        "amount": 9900,
-        "status": "completed",
-        "created_at": "2026-03-23T12:00:00Z",
-        "updated_at": "2026-03-23T12:01:00Z"
-    }
+    "order_no": "ORD20260323120000ABC",
+    "product_type": "coin_package",
+    "product_id": "pkg_1000",
+    "amount": 9900,
+    "status": "completed",
+    "created_at": "2026-03-23T12:00:00Z",
+    "updated_at": "2026-03-23T12:01:00Z"
 }
+```
+
+**Error Response (404 Not Found):**
+```
+HTTP/1.1 404 Not Found
+X-Error-Message: Order not found: order_no=ORD123
 ```
 
 ---
@@ -465,26 +648,24 @@ Get player statistics.
 Authorization: Bearer <token>
 ```
 
-**Response:**
+**Success Response (200 OK):**
 ```json
 {
-    "code": 0,
-    "message": "success",
-    "data": {
-        "player_id": 1000001,
-        "nickname": "Player One",
-        "level": 10,
-        "exp": 15000,
-        "score": 50000,
-        "stats": {
-            "games_played": 500,
-            "games_won": 200,
-            "win_rate": 0.4,
-            "total_score": 500000
-        }
+    "player_id": 1000001,
+    "nickname": "Player One",
+    "level": 10,
+    "exp": 15000,
+    "score": 50000,
+    "stats": {
+        "games_played": 500,
+        "games_won": 200,
+        "win_rate": 0.4,
+        "total_score": 500000
     }
 }
 ```
+
+---
 
 ### GET /players/{player_id}/history
 
@@ -494,6 +675,24 @@ Get player game history.
 - `game_id` (int): Filter by game
 - `page` (int): Page number
 - `limit` (int): Items per page
+
+**Success Response (200 OK):**
+```json
+{
+    "total": 500,
+    "page": 1,
+    "limit": 20,
+    "history": [
+        {
+            "game_id": 1,
+            "room_id": "room_123",
+            "played_at": "2026-03-23T12:00:00Z",
+            "result": "win",
+            "score_change": 500
+        }
+    ]
+}
+```
 
 ---
 
@@ -506,6 +705,25 @@ List guilds.
 **Query Parameters:**
 - `page` (int): Page number
 - `limit` (int): Items per page
+
+**Success Response (200 OK):**
+```json
+{
+    "total": 100,
+    "page": 1,
+    "limit": 20,
+    "guilds": [
+        {
+            "guild_id": 1,
+            "guild_name": "Dragon Slayers",
+            "member_count": 50,
+            "level": 5
+        }
+    ]
+}
+```
+
+---
 
 ### POST /guilds
 
@@ -521,21 +739,87 @@ Authorization: Bearer <token>
 {
     "guild_name": "Dragon Slayers",
     "description": "We hunt dragons!",
-    " emblem": "https://cdn.example.com/guilds/dragon-slayers.png"
+    "emblem": "https://cdn.example.com/guilds/dragon-slayers.png"
 }
 ```
+
+**Success Response (200 OK):**
+```json
+{
+    "guild_id": 101,
+    "guild_name": "Dragon Slayers",
+    "leader_id": 1000001,
+    "created_at": "2026-03-23T12:00:00Z"
+}
+```
+
+---
 
 ### GET /guilds/{guild_id}
 
 Get guild details.
 
+**Success Response (200 OK):**
+```json
+{
+    "guild_id": 101,
+    "guild_name": "Dragon Slayers",
+    "description": "We hunt dragons!",
+    "emblem": "https://cdn.example.com/guilds/dragon-slayers.png",
+    "leader_id": 1000001,
+    "member_count": 50,
+    "level": 5,
+    "created_at": "2026-03-01T12:00:00Z"
+}
+```
+
+---
+
 ### POST /guilds/{guild_id}/join
 
 Request to join a guild.
 
+**Headers:**
+```
+Authorization: Bearer <token>
+```
+
+**Success Response (200 OK):**
+```json
+{
+    "request_id": "guild_req_123",
+    "guild_id": 101,
+    "user_id": 1000001,
+    "status": "pending",
+    "created_at": "2026-03-23T12:00:00Z"
+}
+```
+
+---
+
 ### POST /guilds/{guild_id}/members/{user_id}/kick
 
 Kick a member (guild leader only).
+
+**Headers:**
+```
+Authorization: Bearer <token>
+```
+
+**Success Response (200 OK):**
+```json
+{
+    "guild_id": 101,
+    "user_id": 1000002,
+    "kicked_at": "2026-03-23T12:00:00Z"
+}
+```
+
+**Error Response (403 Forbidden):**
+```
+HTTP/1.1 403 Forbidden
+X-Error-Message: Only guild leader can kick members
+```
 
 ---
 
@@ -555,35 +839,62 @@ Authorization: Bearer <token>
 - `limit` (int): Items per page
 - `read` (bool): Filter by read status
 
-**Response:**
+**Success Response (200 OK):**
 ```json
 {
-    "code": 0,
-    "message": "success",
-    "data": {
-        "total": 100,
-        "unread": 5,
-        "notifications": [
-            {
-                "id": 1,
-                "type": "friend_request",
-                "title": "New Friend Request",
-                "content": "Player Two wants to be your friend",
-                "read": false,
-                "created_at": "2026-03-23T12:00:00Z"
-            }
-        ]
-    }
+    "total": 100,
+    "unread": 5,
+    "notifications": [
+        {
+            "id": 1,
+            "type": "friend_request",
+            "title": "New Friend Request",
+            "content": "Player Two wants to be your friend",
+            "read": false,
+            "created_at": "2026-03-23T12:00:00Z"
+        }
+    ]
 }
 ```
+
+---
 
 ### PUT /notifications/{id}/read
 
 Mark notification as read.
 
+**Headers:**
+```
+Authorization: Bearer <token>
+```
+
+**Success Response (200 OK):**
+```json
+{
+    "id": 1,
+    "read": true,
+    "read_at": "2026-03-23T12:00:00Z"
+}
+```
+
+---
+
 ### PUT /notifications/read-all
 
 Mark all notifications as read.
+
+**Headers:**
+```
+Authorization: Bearer <token>
+```
+
+**Success Response (200 OK):**
+```json
+{
+    "count": 5,
+    "read_at": "2026-03-23T12:00:00Z"
+}
+```
 
 ---
 
@@ -593,16 +904,14 @@ Mark all notifications as read.
 
 Generate a unique ID.
 
-**Response:**
+**Success Response (200 OK):**
 ```json
 {
-    "code": 0,
-    "message": "success",
-    "data": {
-        "id": 1000000000000000001
-    }
+    "id": 1000000000000000001
 }
 ```
+
+---
 
 ### POST /id/batch
 
@@ -615,14 +924,10 @@ Batch generate IDs.
 }
 ```
 
-**Response:**
+**Success Response (200 OK):**
 ```json
 {
-    "code": 0,
-    "message": "success",
-    "data": {
-        "ids": [1000000000000000001, 1000000000000000002, ...]
-    }
+    "ids": [1000000000000000001, 1000000000000000002, ...]
 }
 ```
 
@@ -666,6 +971,16 @@ ws://localhost:8080/ws?token=<jwt_token>
 }
 ```
 
+**Server -> Client (Error):**
+```json
+{
+    "type": "error",
+    "code": 4003,
+    "message": "Room not found",
+    "time": "2026-03-23T12:00:00Z"
+}
+```
+
 ### Message Types
 
 - `room_join`: Join a room
@@ -673,24 +988,7 @@ ws://localhost:8080/ws?token=<jwt_token>
 - `room_msg`: Send message to room
 - `ping`: Ping server
 - `pong`: Pong response
-
----
-
-## Error Codes
-
-| Code | Description |
-|------|-------------|
-| 0 | Success |
-| 40001 | Invalid parameter |
-| 40101 | Unauthorized |
-| 40301 | Forbidden |
-| 40401 | Resource not found |
-| 40901 | Resource conflict |
-| 42901 | Rate limit exceeded |
-| 50001 | Internal server error |
-| 50002 | Database error |
-| 50003 | Cache error |
-| 50004 | External service error |
+- `error`: Error message
 
 ---
 
@@ -707,4 +1005,34 @@ Rate limit headers are included in responses:
 X-RateLimit-Limit: 100
 X-RateLimit-Remaining: 95
 X-RateLimit-Reset: 1648000000
+```
+
+**Rate Limit Exceeded (429):**
+```
+HTTP/1.1 429 Too Many Requests
+X-Error-Message: Rate limit exceeded: 100 requests per minute
+X-RateLimit-Limit: 100
+X-RateLimit-Remaining: 0
+X-RateLimit-Reset: 1648000000
+```
+
+---
+
+## Pagination
+
+List endpoints support pagination:
+
+**Query Parameters:**
+- `page` (int): Page number (default: 1)
+- `limit` (int): Items per page (default: 20, max: 100)
+
+**Response Format:**
+```json
+{
+    "total": 250,
+    "page": 1,
+    "limit": 20,
+    "has_more": true,
+    "items": [...]
+}
 ```
