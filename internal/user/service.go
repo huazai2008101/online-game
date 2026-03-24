@@ -13,15 +13,15 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 
+	"online-game/pkg/apperror"
 	"online-game/pkg/auth"
-	apperrors "online-game/pkg/errors"
 )
 
 var (
-	ErrUserNotFound      = errors.New("user not found")
-	ErrUserExists        = errors.New("user already exists")
-	ErrInvalidCredentials = errors.New("invalid username or password")
-	ErrInvalidToken      = errors.New("invalid token")
+	ErrUserNotFound        = errors.New("user not found")
+	ErrUserExists          = errors.New("user already exists")
+	ErrInvalidCredentials  = errors.New("invalid username or password")
+	ErrInvalidToken        = errors.New("invalid token")
 )
 
 // UserRepository defines user data operations
@@ -49,7 +49,7 @@ func NewUserRepository(db *gorm.DB) UserRepository {
 func (r *userRepository) Create(ctx context.Context, user *User) error {
 	err := r.db.WithContext(ctx).Create(user).Error
 	if err != nil {
-		return apperrors.DatabaseError(err.Error())
+		return apperror.ErrInternalServer.WithData(err.Error())
 	}
 	return nil
 }
@@ -59,9 +59,9 @@ func (r *userRepository) FindByID(ctx context.Context, id uint) (*User, error) {
 	err := r.db.WithContext(ctx).First(&user, id).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, apperrors.UserNotFound()
+			return nil, apperror.ErrUserNotFound
 		}
-		return nil, apperrors.DatabaseError(err.Error())
+		return nil, apperror.ErrInternalServer.WithData(err.Error())
 	}
 	return &user, nil
 }
@@ -71,9 +71,9 @@ func (r *userRepository) FindByUsername(ctx context.Context, username string) (*
 	err := r.db.WithContext(ctx).Where("username = ?", username).First(&user).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, apperrors.UserNotFound()
+			return nil, apperror.ErrUserNotFound
 		}
-		return nil, apperrors.DatabaseError(err.Error())
+		return nil, apperror.ErrInternalServer.WithData(err.Error())
 	}
 	return &user, nil
 }
@@ -83,9 +83,9 @@ func (r *userRepository) FindByEmail(ctx context.Context, email string) (*User, 
 	err := r.db.WithContext(ctx).Where("email = ?", email).First(&user).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, apperrors.UserNotFound()
+			return nil, apperror.ErrUserNotFound
 		}
-		return nil, apperrors.DatabaseError(err.Error())
+		return nil, apperror.ErrInternalServer.WithData(err.Error())
 	}
 	return &user, nil
 }
@@ -95,9 +95,9 @@ func (r *userRepository) FindByPhone(ctx context.Context, phone string) (*User, 
 	err := r.db.WithContext(ctx).Where("phone = ?", phone).First(&user).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, apperrors.UserNotFound()
+			return nil, apperror.ErrUserNotFound
 		}
-		return nil, apperrors.DatabaseError(err.Error())
+		return nil, apperror.ErrInternalServer.WithData(err.Error())
 	}
 	return &user, nil
 }
@@ -105,7 +105,7 @@ func (r *userRepository) FindByPhone(ctx context.Context, phone string) (*User, 
 func (r *userRepository) Update(ctx context.Context, user *User) error {
 	err := r.db.WithContext(ctx).Save(user).Error
 	if err != nil {
-		return apperrors.DatabaseError(err.Error())
+		return apperror.ErrInternalServer.WithData(err.Error())
 	}
 	return nil
 }
@@ -113,7 +113,7 @@ func (r *userRepository) Update(ctx context.Context, user *User) error {
 func (r *userRepository) Delete(ctx context.Context, id uint) error {
 	err := r.db.WithContext(ctx).Delete(&User{}, id).Error
 	if err != nil {
-		return apperrors.DatabaseError(err.Error())
+		return apperror.ErrInternalServer.WithData(err.Error())
 	}
 	return nil
 }
@@ -124,13 +124,13 @@ func (r *userRepository) List(ctx context.Context, page, pageSize int) ([]User, 
 
 	err := r.db.WithContext(ctx).Model(&User{}).Count(&total).Error
 	if err != nil {
-		return nil, 0, apperrors.DatabaseError(err.Error())
+		return nil, 0, apperror.ErrInternalServer.WithData(err.Error())
 	}
 
 	offset := (page - 1) * pageSize
 	err = r.db.WithContext(ctx).Offset(offset).Limit(pageSize).Find(&users).Error
 	if err != nil {
-		return nil, 0, apperrors.DatabaseError(err.Error())
+		return nil, 0, apperror.ErrInternalServer.WithData(err.Error())
 	}
 	return users, total, nil
 }
@@ -181,33 +181,33 @@ type LoginResponse struct {
 func (s *Service) Register(ctx context.Context, req *RegisterRequest) (*User, error) {
 	// Validate input
 	if req.Username == "" {
-		return nil, apperrors.InvalidInput("username", "不能为空")
+		return nil, apperror.ErrBadRequest.WithData(map[string]string{"field": "username", "message": "不能为空"})
 	}
 	if len(req.Password) < 6 {
-		return nil, apperrors.InvalidInput("password", "密码长度至少6位")
+		return nil, apperror.ErrBadRequest.WithData(map[string]string{"field": "password", "message": "密码长度至少6位"})
 	}
 	if req.Email == "" {
-		return nil, apperrors.InvalidInput("email", "不能为空")
+		return nil, apperror.ErrBadRequest.WithData(map[string]string{"field": "email", "message": "不能为空"})
 	}
 
 	// Check if username exists
 	existing, err := s.repo.FindByUsername(ctx, req.Username)
 	if err == nil && existing != nil {
-		return nil, apperrors.AlreadyExists("用户名")
+		return nil, apperror.ErrUserAlreadyExists
 	}
 
 	// Check if email exists
 	if req.Email != "" {
 		existing, err = s.repo.FindByEmail(ctx, req.Email)
 		if err == nil && existing != nil {
-			return nil, apperrors.AlreadyExists("邮箱")
+			return nil, apperror.ErrUserAlreadyExists
 		}
 	}
 
 	// Hash password
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
-		return nil, apperrors.InternalError("密码加密失败")
+		return nil, apperror.ErrInternalServer.WithMessage("密码加密失败")
 	}
 
 	// Generate user ID
@@ -246,28 +246,25 @@ func (s *Service) Register(ctx context.Context, req *RegisterRequest) (*User, er
 func (s *Service) Login(ctx context.Context, req *LoginRequest) (*LoginResponse, error) {
 	// Validate input
 	if req.Username == "" {
-		return nil, apperrors.InvalidInput("username", "不能为空")
+		return nil, apperror.ErrBadRequest.WithData(map[string]string{"field": "username", "message": "不能为空"})
 	}
 	if req.Password == "" {
-		return nil, apperrors.InvalidInput("password", "不能为空")
+		return nil, apperror.ErrBadRequest.WithData(map[string]string{"field": "password", "message": "不能为空"})
 	}
 
 	user, err := s.repo.FindByUsername(ctx, req.Username)
 	if err != nil {
-		if apperrors.IsAppError(err) {
-			return nil, apperrors.InvalidCredentials()
-		}
-		return nil, err
+		return nil, apperror.ErrInvalidPassword
 	}
 
 	// Verify password
 	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.Password)); err != nil {
-		return nil, apperrors.InvalidCredentials()
+		return nil, apperror.ErrInvalidPassword
 	}
 
 	// Check account status
 	if user.Status != 1 {
-		return nil, apperrors.Forbidden("账号已被禁用")
+		return nil, apperror.ErrForbidden.WithMessage("账号已被禁用")
 	}
 
 	// Generate JWT token
@@ -309,7 +306,7 @@ func (s *Service) UpdateProfile(ctx context.Context, userID uint, req map[string
 	if nickname, ok := req["nickname"]; ok {
 		if s, ok := nickname.(string); ok {
 			if len(s) > 50 {
-				return apperrors.InvalidInput("nickname", "长度不能超过50")
+				return apperror.ErrBadRequest.WithData(map[string]string{"field": "nickname", "message": "长度不能超过50"})
 			}
 			user.Nickname = s
 		}
@@ -339,10 +336,10 @@ func (s *Service) UpdateProfile(ctx context.Context, userID uint, req map[string
 // ChangePassword changes user password
 func (s *Service) ChangePassword(ctx context.Context, userID uint, oldPassword, newPassword string) error {
 	if oldPassword == "" {
-		return apperrors.InvalidInput("old_password", "不能为空")
+		return apperror.ErrBadRequest.WithData(map[string]string{"field": "old_password", "message": "不能为空"})
 	}
 	if len(newPassword) < 6 {
-		return apperrors.InvalidInput("new_password", "密码长度至少6位")
+		return apperror.ErrBadRequest.WithData(map[string]string{"field": "new_password", "message": "密码长度至少6位"})
 	}
 
 	user, err := s.repo.FindByID(ctx, userID)
@@ -352,13 +349,13 @@ func (s *Service) ChangePassword(ctx context.Context, userID uint, oldPassword, 
 
 	// Verify old password
 	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(oldPassword)); err != nil {
-		return apperrors.InvalidCredentials()
+		return apperror.ErrInvalidPassword
 	}
 
 	// Hash new password
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
 	if err != nil {
-		return apperrors.InternalError("密码加密失败")
+		return apperror.ErrInternalServer.WithMessage("密码加密失败")
 	}
 
 	user.Password = string(hashedPassword)
@@ -386,7 +383,7 @@ func (s *Service) generateToken(user *User) (string, int64, error) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	tokenString, err := token.SignedString([]byte(s.jwtConfig.Secret))
 	if err != nil {
-		return "", 0, apperrors.InternalError("生成令牌失败")
+		return "", 0, apperror.ErrInternalServer.WithMessage("生成令牌失败")
 	}
 
 	return tokenString, exp.Unix(), nil
@@ -402,7 +399,7 @@ func (s *Service) validateToken(tokenString string) (*auth.Claims, error) {
 
 	claims, err := auth.ParseToken(config, tokenString)
 	if err != nil {
-		return nil, apperrors.InvalidToken(err.Error())
+		return nil, apperror.ErrUnauthorized.WithMessage(err.Error())
 	}
 
 	return claims, nil
@@ -465,23 +462,23 @@ func (s *Service) UnbanUser(ctx context.Context, userID uint) error {
 // CheckUsername checks if username is available
 func (s *Service) CheckUsername(ctx context.Context, username string) (bool, error) {
 	if username == "" {
-		return false, apperrors.InvalidInput("username", "不能为空")
+		return false, apperror.ErrBadRequest.WithData(map[string]string{"field": "username", "message": "不能为空"})
 	}
 
 	_, err := s.repo.FindByUsername(ctx, username)
 	if err != nil {
-		if apperrors.IsAppError(err) {
+		if errors.Is(err, ErrUserNotFound) {
 			return true, nil
 		}
 		return false, err
 	}
-	return false, nil
+	return false, apperror.ErrUserAlreadyExists
 }
 
 // ResetPassword resets user password
 func (s *Service) ResetPassword(ctx context.Context, email string) (string, error) {
 	if email == "" {
-		return "", apperrors.InvalidInput("email", "不能为空")
+		return "", apperror.ErrBadRequest.WithData(map[string]string{"field": "email", "message": "不能为空"})
 	}
 
 	user, err := s.repo.FindByEmail(ctx, email)
@@ -494,7 +491,7 @@ func (s *Service) ResetPassword(ctx context.Context, email string) (string, erro
 
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
 	if err != nil {
-		return "", apperrors.InternalError("密码加密失败")
+		return "", apperror.ErrInternalServer.WithMessage("密码加密失败")
 	}
 
 	user.Password = string(hashedPassword)

@@ -10,7 +10,7 @@ import (
 	"gorm.io/gorm"
 
 	"online-game/pkg/actor"
-	apperrors "online-game/pkg/errors"
+	"online-game/pkg/apperror"
 	"online-game/pkg/engine"
 )
 
@@ -71,13 +71,13 @@ func NewService(repo GameRepository, mgr *GameInstanceManager) *Service {
 func (s *Service) CreateGame(ctx context.Context, req *CreateGameRequest) (*Game, error) {
 	// Validate input
 	if req.GameCode == "" {
-		return nil, apperrors.InvalidInput("game_code", "不能为空")
+		return nil, apperror.ErrBadRequest.WithData(map[string]string{"field": "game_code", "message": "不能为空"})
 	}
 	if req.GameName == "" {
-		return nil, apperrors.InvalidInput("game_name", "不能为空")
+		return nil, apperror.ErrBadRequest.WithData(map[string]string{"field": "game_name", "message": "不能为空"})
 	}
 	if req.GameType == "" {
-		return nil, apperrors.InvalidInput("game_type", "不能为空")
+		return nil, apperror.ErrBadRequest.WithData(map[string]string{"field": "game_type", "message": "不能为空"})
 	}
 
 	game := &Game{
@@ -133,7 +133,7 @@ func (s *Service) UpdateGame(ctx context.Context, id uint, req *UpdateGameReques
 	}
 	if req.Status != nil {
 		if *req.Status < 0 || *req.Status > 2 {
-			return apperrors.InvalidInput("status", "值必须为0-2")
+			return apperror.ErrBadRequest.WithData(map[string]string{"field": "status", "message": "值必须为0-2"})
 		}
 		game.Status = *req.Status
 	}
@@ -155,7 +155,7 @@ func (s *Service) UpdateGameConfig(ctx context.Context, id uint, config map[stri
 
 	configBytes, err := json.Marshal(config)
 	if err != nil {
-		return apperrors.InternalError(err)
+		return apperror.ErrInternalServer.WithData(err.Error())
 	}
 
 	game.GameConfig = string(configBytes)
@@ -172,7 +172,7 @@ func (s *Service) GetGameConfig(ctx context.Context, id uint) (map[string]interf
 	var config map[string]interface{}
 	if game.GameConfig != "" {
 		if err := json.Unmarshal([]byte(game.GameConfig), &config); err != nil {
-			return nil, apperrors.InternalError(err)
+			return nil, apperror.ErrInternalServer.WithData(err.Error())
 		}
 	}
 
@@ -185,13 +185,13 @@ func (s *Service) GetGameConfig(ctx context.Context, id uint) (map[string]interf
 func (s *Service) CreateRoom(ctx context.Context, req *CreateRoomRequest) (*GameRoom, error) {
 	// Validate input
 	if req.RoomID == "" {
-		return nil, apperrors.InvalidInput("room_id", "不能为空")
+		return nil, apperror.ErrBadRequest.WithData(map[string]string{"field": "room_id", "message": "不能为空"})
 	}
 	if req.RoomName == "" {
-		return nil, apperrors.InvalidInput("room_name", "不能为空")
+		return nil, apperror.ErrBadRequest.WithData(map[string]string{"field": "room_name", "message": "不能为空"})
 	}
 	if req.MaxPlayers < 2 || req.MaxPlayers > 100 {
-		return nil, apperrors.InvalidInput("max_players", "值必须在2-100之间")
+		return nil, apperror.ErrBadRequest.WithData(map[string]string{"field": "max_players", "message": "值必须在2-100之间"})
 	}
 
 	room := &GameRoom{
@@ -253,7 +253,7 @@ func (s *Service) UpdateRoom(ctx context.Context, id uint, updates map[string]in
 	}
 	if maxPlayers, ok := updates["max_players"].(int); ok {
 		if maxPlayers < 2 || maxPlayers > 100 {
-			return apperrors.InvalidInput("max_players", "值必须在2-100之间")
+			return apperror.ErrBadRequest.WithData(map[string]string{"field": "max_players", "message": "值必须在2-100之间"})
 		}
 		room.MaxPlayers = maxPlayers
 	}
@@ -290,10 +290,10 @@ func (s *Service) CloseRoom(ctx context.Context, id uint) error {
 // JoinRoom adds a player to a room
 func (s *Service) JoinRoom(ctx context.Context, roomID, playerID string) error {
 	if roomID == "" {
-		return apperrors.InvalidInput("room_id", "不能为空")
+		return apperror.ErrBadRequest.WithData(map[string]string{"field": "room_id", "message": "不能为空"})
 	}
 	if playerID == "" {
-		return apperrors.InvalidInput("player_id", "不能为空")
+		return apperror.ErrBadRequest.WithData(map[string]string{"field": "player_id", "message": "不能为空"})
 	}
 
 	room, err := s.repo.GetRoomByRoomID(roomID)
@@ -325,10 +325,10 @@ func (s *Service) JoinRoom(ctx context.Context, roomID, playerID string) error {
 // LeaveRoom removes a player from a room
 func (s *Service) LeaveRoom(ctx context.Context, roomID, playerID string) error {
 	if roomID == "" {
-		return apperrors.InvalidInput("room_id", "不能为空")
+		return apperror.ErrBadRequest.WithData(map[string]string{"field": "room_id", "message": "不能为空"})
 	}
 	if playerID == "" {
-		return apperrors.InvalidInput("player_id", "不能为空")
+		return apperror.ErrBadRequest.WithData(map[string]string{"field": "player_id", "message": "不能为空"})
 	}
 
 	room, err := s.repo.GetRoomByRoomID(roomID)
@@ -361,10 +361,10 @@ func (s *Service) LeaveRoom(ctx context.Context, roomID, playerID string) error 
 func (s *Service) StartGame(ctx context.Context, gameID uint, req *StartGameRequest) (*GameSession, error) {
 	// Validate input
 	if req.RoomID == "" {
-		return nil, apperrors.InvalidInput("room_id", "不能为空")
+		return nil, apperror.ErrBadRequest.WithData(map[string]string{"field": "room_id", "message": "不能为空"})
 	}
 	if len(req.Players) == 0 {
-		return nil, apperrors.InvalidInput("players", "至少需要一个玩家")
+		return nil, apperror.ErrBadRequest.WithData(map[string]string{"field": "players", "message": "至少需要一个玩家"})
 	}
 
 	game, err := s.repo.GetGameByID(gameID)
@@ -377,13 +377,13 @@ func (s *Service) StartGame(ctx context.Context, gameID uint, req *StartGameRequ
 	// Create game actor
 	gameActor, err := s.mgr.CreateGameActor(gameIDStr, req.RoomID)
 	if err != nil {
-		return nil, apperrors.InternalError(err)
+		return nil, apperror.ErrInternalServer.WithData(err.Error())
 	}
 
 	// Create and initialize engine
 	eng, err := s.mgr.CreateGameEngine(gameIDStr)
 	if err != nil {
-		return nil, apperrors.InternalError(err)
+		return nil, apperror.ErrInternalServer.WithData(err.Error())
 	}
 
 	// Initialize game with config
@@ -430,7 +430,7 @@ func (s *Service) StopGame(ctx context.Context, gameID uint, roomID, reason stri
 
 	// Stop game actor
 	if err := s.mgr.StopGameActor(gameIDStr, roomID); err != nil {
-		return apperrors.NotFound("游戏实例")
+		return apperror.ErrNotFound.WithMessage("游戏实例")
 	}
 
 	// Update session
@@ -457,7 +457,7 @@ func (s *Service) GetGameStatus(ctx context.Context, gameID uint, roomID string)
 
 	actor, err := s.mgr.GetGameActor(gameIDStr, roomID)
 	if err != nil {
-		return nil, apperrors.NotFound("游戏实例")
+		return nil, apperror.ErrNotFound.WithMessage("游戏实例")
 	}
 
 	stats := actor.Stats()
@@ -479,20 +479,20 @@ func (s *Service) GetGameStatus(ctx context.Context, gameID uint, roomID string)
 // PlayerAction sends a player action to the game
 func (s *Service) PlayerAction(ctx context.Context, gameID uint, roomID, playerID string, action string, data map[string]interface{}) error {
 	if roomID == "" {
-		return apperrors.InvalidInput("room_id", "不能为空")
+		return apperror.ErrBadRequest.WithData(map[string]string{"field": "room_id", "message": "不能为空"})
 	}
 	if playerID == "" {
-		return apperrors.InvalidInput("player_id", "不能为空")
+		return apperror.ErrBadRequest.WithData(map[string]string{"field": "player_id", "message": "不能为空"})
 	}
 	if action == "" {
-		return apperrors.InvalidInput("action", "不能为空")
+		return apperror.ErrBadRequest.WithData(map[string]string{"field": "action", "message": "不能为空"})
 	}
 
 	gameIDStr := fmt.Sprintf("%d", gameID)
 
 	actor, err := s.mgr.GetGameActor(gameIDStr, roomID)
 	if err != nil {
-		return apperrors.NotFound("游戏实例")
+		return apperror.ErrNotFound.WithMessage("游戏实例")
 	}
 
 	return actor.Send(&actor.PlayerActionMessage{
@@ -518,7 +518,7 @@ func (s *Service) GetSessionState(ctx context.Context, id uint) (map[string]inte
 	var state map[string]interface{}
 	if session.FinalState != "" {
 		if err := json.Unmarshal([]byte(session.FinalState), &state); err != nil {
-			return nil, apperrors.InternalError(err)
+			return nil, apperror.ErrInternalServer.WithData(err.Error())
 		}
 	}
 
@@ -531,16 +531,16 @@ func (s *Service) GetSessionState(ctx context.Context, id uint) (map[string]inte
 func (s *Service) CreateGameVersion(ctx context.Context, req *CreateGameVersionRequest) (*GameVersion, error) {
 	// Validate input
 	if req.Version == "" {
-		return nil, apperrors.InvalidInput("version", "不能为空")
+		return nil, apperror.ErrBadRequest.WithData(map[string]string{"field": "version", "message": "不能为空"})
 	}
 	if req.ScriptType != "js" && req.ScriptType != "wasm" {
-		return nil, apperrors.InvalidInput("script_type", "必须是js或wasm")
+		return nil, apperror.ErrBadRequest.WithData(map[string]string{"field": "script_type", "message": "必须是js或wasm"})
 	}
 	if req.ScriptPath == "" {
-		return nil, apperrors.InvalidInput("script_path", "不能为空")
+		return nil, apperror.ErrBadRequest.WithData(map[string]string{"field": "script_path", "message": "不能为空"})
 	}
 	if req.ScriptHash == "" {
-		return nil, apperrors.InvalidInput("script_hash", "不能为空")
+		return nil, apperror.ErrBadRequest.WithData(map[string]string{"field": "script_hash", "message": "不能为空"})
 	}
 
 	version := &GameVersion{
@@ -584,7 +584,7 @@ func (s *Service) UpdateGameVersion(ctx context.Context, id uint, req *UpdateGam
 
 	if req.Status != nil {
 		if *req.Status < 0 || *req.Status > 2 {
-			return apperrors.InvalidInput("status", "值必须为0-2")
+			return apperror.ErrBadRequest.WithData(map[string]string{"field": "status", "message": "值必须为0-2"})
 		}
 		version.Status = *req.Status
 	}
@@ -677,7 +677,7 @@ func NewRepositoryImpl(db *gorm.DB) GameRepository {
 func (r *RepositoryImpl) CreateGame(game *Game) error {
 	err := r.db.Create(game).Error
 	if err != nil {
-		return apperrors.DatabaseError(err.Error())
+		return apperror.ErrInternalServer.WithData(err.Error())
 	}
 	return nil
 }
@@ -688,9 +688,9 @@ func (r *RepositoryImpl) GetGameByID(id uint) (*Game, error) {
 	err := r.db.First(&game, id).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, apperrors.GameNotFound()
+			return nil, apperror.ErrGameNotFound
 		}
-		return nil, apperrors.DatabaseError(err.Error())
+		return nil, apperror.ErrInternalServer.WithData(err.Error())
 	}
 	return &game, nil
 }
@@ -701,9 +701,9 @@ func (r *RepositoryImpl) GetGameByCode(code string) (*Game, error) {
 	err := r.db.Where("game_code = ?", code).First(&game).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, apperrors.GameNotFound()
+			return nil, apperror.ErrGameNotFound
 		}
-		return nil, apperrors.DatabaseError(err.Error())
+		return nil, apperror.ErrInternalServer.WithData(err.Error())
 	}
 	return &game, nil
 }
@@ -719,12 +719,12 @@ func (r *RepositoryImpl) ListGames(orgID int64, offset, limit int) ([]*Game, int
 	}
 
 	if err := query.Count(&total).Error; err != nil {
-		return nil, 0, apperrors.DatabaseError(err.Error())
+		return nil, 0, apperror.ErrInternalServer.WithData(err.Error())
 	}
 
 	err := query.Offset(offset).Limit(limit).Find(&games).Error
 	if err != nil {
-		return nil, 0, apperrors.DatabaseError(err.Error())
+		return nil, 0, apperror.ErrInternalServer.WithData(err.Error())
 	}
 	return games, total, nil
 }
@@ -733,7 +733,7 @@ func (r *RepositoryImpl) ListGames(orgID int64, offset, limit int) ([]*Game, int
 func (r *RepositoryImpl) UpdateGame(game *Game) error {
 	err := r.db.Save(game).Error
 	if err != nil {
-		return apperrors.DatabaseError(err.Error())
+		return apperror.ErrInternalServer.WithData(err.Error())
 	}
 	return nil
 }
@@ -742,7 +742,7 @@ func (r *RepositoryImpl) UpdateGame(game *Game) error {
 func (r *RepositoryImpl) DeleteGame(id uint) error {
 	err := r.db.Delete(&Game{}, id).Error
 	if err != nil {
-		return apperrors.DatabaseError(err.Error())
+		return apperror.ErrInternalServer.WithData(err.Error())
 	}
 	return nil
 }
@@ -751,7 +751,7 @@ func (r *RepositoryImpl) DeleteGame(id uint) error {
 func (r *RepositoryImpl) CreateRoom(room *GameRoom) error {
 	err := r.db.Create(room).Error
 	if err != nil {
-		return apperrors.DatabaseError(err.Error())
+		return apperror.ErrInternalServer.WithData(err.Error())
 	}
 	return nil
 }
@@ -762,9 +762,9 @@ func (r *RepositoryImpl) GetRoomByID(id uint) (*GameRoom, error) {
 	err := r.db.First(&room, id).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, apperrors.RoomNotFound()
+			return nil, apperror.ErrPlayerNotFound.WithMessage("房间不存在")
 		}
-		return nil, apperrors.DatabaseError(err.Error())
+		return nil, apperror.ErrInternalServer.WithData(err.Error())
 	}
 	return &room, nil
 }
@@ -775,9 +775,9 @@ func (r *RepositoryImpl) GetRoomByRoomID(roomID string) (*GameRoom, error) {
 	err := r.db.Where("room_id = ?", roomID).First(&room).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, apperrors.RoomNotFound()
+			return nil, apperror.ErrPlayerNotFound.WithMessage("房间不存在")
 		}
-		return nil, apperrors.DatabaseError(err.Error())
+		return nil, apperror.ErrInternalServer.WithData(err.Error())
 	}
 	return &room, nil
 }
@@ -796,12 +796,12 @@ func (r *RepositoryImpl) ListRooms(gameID uint, status string, offset, limit int
 	}
 
 	if err := query.Count(&total).Error; err != nil {
-		return nil, 0, apperrors.DatabaseError(err.Error())
+		return nil, 0, apperror.ErrInternalServer.WithData(err.Error())
 	}
 
 	err := query.Offset(offset).Limit(limit).Find(&rooms).Error
 	if err != nil {
-		return nil, 0, apperrors.DatabaseError(err.Error())
+		return nil, 0, apperror.ErrInternalServer.WithData(err.Error())
 	}
 	return rooms, total, nil
 }
@@ -810,7 +810,7 @@ func (r *RepositoryImpl) ListRooms(gameID uint, status string, offset, limit int
 func (r *RepositoryImpl) UpdateRoom(room *GameRoom) error {
 	err := r.db.Save(room).Error
 	if err != nil {
-		return apperrors.DatabaseError(err.Error())
+		return apperror.ErrInternalServer.WithData(err.Error())
 	}
 	return nil
 }
@@ -819,7 +819,7 @@ func (r *RepositoryImpl) UpdateRoom(room *GameRoom) error {
 func (r *RepositoryImpl) DeleteRoom(id uint) error {
 	err := r.db.Delete(&GameRoom{}, id).Error
 	if err != nil {
-		return apperrors.DatabaseError(err.Error())
+		return apperror.ErrInternalServer.WithData(err.Error())
 	}
 	return nil
 }
@@ -828,7 +828,7 @@ func (r *RepositoryImpl) DeleteRoom(id uint) error {
 func (r *RepositoryImpl) CreateSession(session *GameSession) error {
 	err := r.db.Create(session).Error
 	if err != nil {
-		return apperrors.DatabaseError(err.Error())
+		return apperror.ErrInternalServer.WithData(err.Error())
 	}
 	return nil
 }
@@ -839,9 +839,9 @@ func (r *RepositoryImpl) GetSessionByID(id uint) (*GameSession, error) {
 	err := r.db.First(&session, id).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, apperrors.NotFound("游戏会话")
+			return nil, apperror.ErrNotFound.WithMessage("游戏会话")
 		}
-		return nil, apperrors.DatabaseError(err.Error())
+		return nil, apperror.ErrInternalServer.WithData(err.Error())
 	}
 	return &session, nil
 }
@@ -850,7 +850,7 @@ func (r *RepositoryImpl) GetSessionByID(id uint) (*GameSession, error) {
 func (r *RepositoryImpl) UpdateSession(session *GameSession) error {
 	err := r.db.Save(session).Error
 	if err != nil {
-		return apperrors.DatabaseError(err.Error())
+		return apperror.ErrInternalServer.WithData(err.Error())
 	}
 	return nil
 }
@@ -861,9 +861,9 @@ func (r *RepositoryImpl) GetActiveSession(roomID string) (*GameSession, error) {
 	err := r.db.Where("room_id = ? AND status = ?", roomID, "running").First(&session).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, apperrors.NotFound("游戏会话")
+			return nil, apperror.ErrNotFound.WithMessage("游戏会话")
 		}
-		return nil, apperrors.DatabaseError(err.Error())
+		return nil, apperror.ErrInternalServer.WithData(err.Error())
 	}
 	return &session, nil
 }
@@ -874,7 +874,7 @@ func (r *RepositoryImpl) GetActiveSession(roomID string) (*GameSession, error) {
 func (r *RepositoryImpl) CreateGameVersion(version *GameVersion) error {
 	err := r.db.Create(version).Error
 	if err != nil {
-		return apperrors.DatabaseError(err.Error())
+		return apperror.ErrInternalServer.WithData(err.Error())
 	}
 	return nil
 }
@@ -885,9 +885,9 @@ func (r *RepositoryImpl) GetGameVersion(id uint) (*GameVersion, error) {
 	err := r.db.First(&version, id).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, apperrors.NotFound("游戏版本")
+			return nil, apperror.ErrNotFound.WithMessage("游戏版本")
 		}
-		return nil, apperrors.DatabaseError(err.Error())
+		return nil, apperror.ErrInternalServer.WithData(err.Error())
 	}
 	return &version, nil
 }
@@ -897,7 +897,7 @@ func (r *RepositoryImpl) ListGameVersions(gameID uint) ([]*GameVersion, error) {
 	var versions []*GameVersion
 	err := r.db.Where("game_id = ?", gameID).Order("created_at DESC").Find(&versions).Error
 	if err != nil {
-		return nil, apperrors.DatabaseError(err.Error())
+		return nil, apperror.ErrInternalServer.WithData(err.Error())
 	}
 	return versions, nil
 }
@@ -908,9 +908,9 @@ func (r *RepositoryImpl) GetLatestVersion(gameID string) (*GameVersion, error) {
 	err := r.db.Where("game_code = ?", gameID).Order("created_at DESC").First(&version).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, apperrors.NotFound("游戏版本")
+			return nil, apperror.ErrNotFound.WithMessage("游戏版本")
 		}
-		return nil, apperrors.DatabaseError(err.Error())
+		return nil, apperror.ErrInternalServer.WithData(err.Error())
 	}
 	return &version, nil
 }
@@ -919,7 +919,7 @@ func (r *RepositoryImpl) GetLatestVersion(gameID string) (*GameVersion, error) {
 func (r *RepositoryImpl) UpdateGameVersion(version *GameVersion) error {
 	err := r.db.Save(version).Error
 	if err != nil {
-		return apperrors.DatabaseError(err.Error())
+		return apperror.ErrInternalServer.WithData(err.Error())
 	}
 	return nil
 }
@@ -928,7 +928,7 @@ func (r *RepositoryImpl) UpdateGameVersion(version *GameVersion) error {
 func (r *RepositoryImpl) DeleteGameVersion(id uint) error {
 	err := r.db.Delete(&GameVersion{}, id).Error
 	if err != nil {
-		return apperrors.DatabaseError(err.Error())
+		return apperror.ErrInternalServer.WithData(err.Error())
 	}
 	return nil
 }

@@ -7,7 +7,7 @@ import (
 
 	"gorm.io/gorm"
 
-	apperrors "online-game/pkg/errors"
+	"online-game/pkg/apperror"
 )
 
 var (
@@ -53,19 +53,19 @@ func NewService(playerRepo PlayerRepository, statsRepo PlayerStatsRepository) *S
 func (s *Service) CreatePlayer(ctx context.Context, req *CreatePlayerRequest) (*Player, error) {
 	// Validate input
 	if req.UserID == 0 {
-		return nil, apperrors.InvalidInput("user_id", "不能为空")
+		return nil, apperror.ErrBadRequest.WithData(map[string]string{"field": "user_id", "message": "不能为空"})
 	}
 	if req.GameID == 0 {
-		return nil, apperrors.InvalidInput("game_id", "不能为空")
+		return nil, apperror.ErrBadRequest.WithData(map[string]string{"field": "game_id", "message": "不能为空"})
 	}
 	if req.Nickname == "" {
-		return nil, apperrors.InvalidInput("nickname", "不能为空")
+		return nil, apperror.ErrBadRequest.WithData(map[string]string{"field": "nickname", "message": "不能为空"})
 	}
 
 	// Check if player already exists
 	existing, _ := s.playerRepo.GetPlayerByUserAndGame(req.UserID, req.GameID)
 	if existing != nil {
-		return nil, apperrors.AlreadyExists("角色")
+		return nil, apperror.AlreadyExists("角色")
 	}
 
 	player := &Player{
@@ -250,7 +250,7 @@ func NewPlayerRepositoryImpl(db *gorm.DB) PlayerRepository {
 func (r *PlayerRepositoryImpl) CreatePlayer(player *Player) error {
 	err := r.db.Create(player).Error
 	if err != nil {
-		return apperrors.DatabaseError(err.Error())
+		return apperror.ErrInternalServer.WithData(err.Error())
 	}
 	return nil
 }
@@ -260,9 +260,9 @@ func (r *PlayerRepositoryImpl) GetPlayerByID(id uint) (*Player, error) {
 	err := r.db.First(&player, id).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, apperrors.PlayerNotFound()
+			return nil, apperror.ErrPlayerNotFound
 		}
-		return nil, apperrors.DatabaseError(err.Error())
+		return nil, apperror.ErrInternalServer.WithData(err.Error())
 	}
 	return &player, nil
 }
@@ -272,9 +272,9 @@ func (r *PlayerRepositoryImpl) GetPlayerByUserAndGame(userID, gameID uint) (*Pla
 	err := r.db.Where("user_id = ? AND game_id = ?", userID, gameID).First(&player).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, apperrors.PlayerNotFound()
+			return nil, apperror.ErrPlayerNotFound
 		}
-		return nil, apperrors.DatabaseError(err.Error())
+		return nil, apperror.ErrInternalServer.WithData(err.Error())
 	}
 	return &player, nil
 }
@@ -289,12 +289,12 @@ func (r *PlayerRepositoryImpl) ListPlayers(gameID uint, offset, limit int) ([]*P
 	}
 
 	if err := query.Count(&total).Error; err != nil {
-		return nil, 0, apperrors.DatabaseError(err.Error())
+		return nil, 0, apperror.ErrInternalServer.WithData(err.Error())
 	}
 
 	err := query.Offset(offset).Limit(limit).Order("score DESC, level DESC").Find(&players).Error
 	if err != nil {
-		return nil, 0, apperrors.DatabaseError(err.Error())
+		return nil, 0, apperror.ErrInternalServer.WithData(err.Error())
 	}
 	return players, total, nil
 }
@@ -304,7 +304,7 @@ func (r *PlayerRepositoryImpl) ListPlayersByUserID(userID uint) ([]*Player, erro
 	var players []*Player
 	err := r.db.Where("user_id = ?", userID).Find(&players).Error
 	if err != nil {
-		return nil, apperrors.DatabaseError(err.Error())
+		return nil, apperror.ErrInternalServer.WithData(err.Error())
 	}
 	return players, nil
 }
@@ -312,7 +312,7 @@ func (r *PlayerRepositoryImpl) ListPlayersByUserID(userID uint) ([]*Player, erro
 func (r *PlayerRepositoryImpl) UpdatePlayer(player *Player) error {
 	err := r.db.Save(player).Error
 	if err != nil {
-		return apperrors.DatabaseError(err.Error())
+		return apperror.ErrInternalServer.WithData(err.Error())
 	}
 	return nil
 }
@@ -320,7 +320,7 @@ func (r *PlayerRepositoryImpl) UpdatePlayer(player *Player) error {
 func (r *PlayerRepositoryImpl) DeletePlayer(id uint) error {
 	err := r.db.Delete(&Player{}, id).Error
 	if err != nil {
-		return apperrors.DatabaseError(err.Error())
+		return apperror.ErrInternalServer.WithData(err.Error())
 	}
 	return nil
 }

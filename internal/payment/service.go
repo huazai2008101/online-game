@@ -11,7 +11,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
-	apperrors "online-game/pkg/errors"
+	"online-game/pkg/apperror"
 )
 
 // TransactionalRepository defines transactional operations
@@ -70,12 +70,12 @@ func GenerateOrderNo() (string, error) {
 // CreateOrder creates a new payment order
 func (s *Service) CreateOrder(ctx context.Context, req *CreateOrderRequest) (*Order, error) {
 	if req.Amount <= 0 {
-		return nil, apperrors.InvalidInput("amount", "金额必须大于0")
+		return nil, apperror.ErrBadRequest.WithData(map[string]string{"field": "amount", "message": "金额必须大于0"})
 	}
 
 	orderNo, err := GenerateOrderNo()
 	if err != nil {
-		return nil, apperrors.InternalError("生成订单号失败")
+		return nil, apperror.ErrInternalServer.WithMessage("生成订单号失败")
 	}
 
 	order := &Order{
@@ -90,7 +90,7 @@ func (s *Service) CreateOrder(ctx context.Context, req *CreateOrderRequest) (*Or
 	}
 
 	if err := s.orderRepo.CreateOrder(order); err != nil {
-		return nil, apperrors.DatabaseError(err.Error())
+		return nil, apperror.ErrInternalServer.WithData(err.Error())
 	}
 
 	return order, nil
@@ -116,11 +116,11 @@ func (s *Service) ListOrders(ctx context.Context, userID uint, page, pageSize in
 func (s *Service) ProcessPayment(ctx context.Context, orderID uint, paymentData map[string]interface{}) error {
 	order, err := s.orderRepo.GetOrderByID(orderID)
 	if err != nil {
-		return apperrors.OrderNotFound()
+		return apperror.OrderNotFound()
 	}
 
 	if order.Status == "paid" || order.Status == "completed" {
-		return apperrors.InvalidState("订单已支付")
+		return apperror.InvalidState("订单已支付")
 	}
 
 	// In a real implementation, this would integrate with payment gateways
@@ -128,14 +128,14 @@ func (s *Service) ProcessPayment(ctx context.Context, orderID uint, paymentData 
 	order.Status = "paid"
 
 	if err := s.orderRepo.UpdateOrder(order); err != nil {
-		return apperrors.DatabaseError(err.Error())
+		return apperror.ErrInternalServer.WithData(err.Error())
 	}
 
 	// Add score to user's account
 	if order.ProductType == "score" || order.ProductType == "coins" {
 		_, err := s.AddScore(ctx, order.UserID, order.Amount, &order.ID, fmt.Sprintf("订单支付: %s", order.OrderNo))
 		if err != nil {
-			return apperrors.DatabaseError(err.Error())
+			return apperror.ErrInternalServer.WithData(err.Error())
 		}
 	}
 
@@ -146,24 +146,24 @@ func (s *Service) ProcessPayment(ctx context.Context, orderID uint, paymentData 
 func (s *Service) RefundOrder(ctx context.Context, orderID uint, reason string) error {
 	order, err := s.orderRepo.GetOrderByID(orderID)
 	if err != nil {
-		return apperrors.OrderNotFound()
+		return apperror.OrderNotFound()
 	}
 
 	if order.Status != "paid" && order.Status != "completed" {
-		return apperrors.InvalidState("订单状态不允许退款")
+		return apperror.InvalidState("订单状态不允许退款")
 	}
 
 	order.Status = "refunded"
 
 	if err := s.orderRepo.UpdateOrder(order); err != nil {
-		return apperrors.DatabaseError(err.Error())
+		return apperror.ErrInternalServer.WithData(err.Error())
 	}
 
 	// Deduct score back
 	if order.ProductType == "score" || order.ProductType == "coins" {
 		_, err := s.DeductScore(ctx, order.UserID, order.Amount, &order.ID, fmt.Sprintf("订单退款: %s. 原因: %s", order.OrderNo, reason))
 		if err != nil {
-			return apperrors.DatabaseError(err.Error())
+			return apperror.ErrInternalServer.WithData(err.Error())
 		}
 	}
 
@@ -180,19 +180,19 @@ func (s *Service) GetScore(ctx context.Context, userID uint) (*Score, error) {
 // AddScore adds score to user's account
 func (s *Service) AddScore(ctx context.Context, userID uint, amount int64, orderID *uint, reason string) (*Score, error) {
 	if amount <= 0 {
-		return nil, apperrors.InvalidInput("amount", "金额必须大于0")
+		return nil, apperror.ErrBadRequest.WithData(map[string]string{"field": "amount", "message": "金额必须大于0"})
 	}
 
 	score, err := s.scoreRepo.GetOrCreateScore(userID)
 	if err != nil {
-		return nil, apperrors.DatabaseError(err.Error())
+		return nil, apperror.ErrInternalServer.WithData(err.Error())
 	}
 
 	oldBalance := score.Balance
 	score.Balance += amount
 
 	if err := s.scoreRepo.UpdateScore(score); err != nil {
-		return nil, apperrors.DatabaseError(err.Error())
+		return nil, apperror.ErrInternalServer.WithData(err.Error())
 	}
 
 	// Create log
@@ -216,23 +216,23 @@ func (s *Service) AddScore(ctx context.Context, userID uint, amount int64, order
 // DeductScore deducts score from user's account
 func (s *Service) DeductScore(ctx context.Context, userID uint, amount int64, orderID *uint, reason string) (*Score, error) {
 	if amount <= 0 {
-		return nil, apperrors.InvalidInput("amount", "金额必须大于0")
+		return nil, apperror.ErrBadRequest.WithData(map[string]string{"field": "amount", "message": "金额必须大于0"})
 	}
 
 	score, err := s.scoreRepo.GetOrCreateScore(userID)
 	if err != nil {
-		return nil, apperrors.DatabaseError(err.Error())
+		return nil, apperror.ErrInternalServer.WithData(err.Error())
 	}
 
 	if score.Balance < amount {
-		return nil, apperrors.InsufficientBalance("积分余额不足")
+		return nil, apperror.InsufficientBalance("积分余额不足")
 	}
 
 	oldBalance := score.Balance
 	score.Balance -= amount
 
 	if err := s.scoreRepo.UpdateScore(score); err != nil {
-		return nil, apperrors.DatabaseError(err.Error())
+		return nil, apperror.ErrInternalServer.WithData(err.Error())
 	}
 
 	// Create log
@@ -265,11 +265,11 @@ func (s *Service) RechargeScore(ctx context.Context, userID uint, amount int64, 
 // TransferScore transfers score between users using a transaction
 func (s *Service) TransferScore(ctx context.Context, fromUserID, toUserID uint, amount int64, reason string) error {
 	if amount <= 0 {
-		return apperrors.InvalidInput("amount", "金额必须大于0")
+		return apperror.ErrBadRequest.WithData(map[string]string{"field": "amount", "message": "金额必须大于0"})
 	}
 
 	if fromUserID == toUserID {
-		return apperrors.InvalidInput("to_user_id", "不能转账给自己")
+		return apperror.ErrBadRequest.WithData(map[string]string{"field": "to_user_id", "message": "不能转账给自己"})
 	}
 
 	// Use repository's transaction method
@@ -333,7 +333,7 @@ func NewOrderRepositoryImpl(db *gorm.DB) OrderRepository {
 func (r *OrderRepositoryImpl) CreateOrder(order *Order) error {
 	err := r.db.Create(order).Error
 	if err != nil {
-		return apperrors.DatabaseError(err.Error())
+		return apperror.ErrInternalServer.WithData(err.Error())
 	}
 	return nil
 }
@@ -343,9 +343,9 @@ func (r *OrderRepositoryImpl) GetOrderByID(id uint) (*Order, error) {
 	err := r.db.First(&order, id).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, apperrors.OrderNotFound()
+			return nil, apperror.OrderNotFound()
 		}
-		return nil, apperrors.DatabaseError(err.Error())
+		return nil, apperror.ErrInternalServer.WithData(err.Error())
 	}
 	return &order, nil
 }
@@ -355,9 +355,9 @@ func (r *OrderRepositoryImpl) GetOrderByNo(orderNo string) (*Order, error) {
 	err := r.db.Where("order_no = ?", orderNo).First(&order).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, apperrors.OrderNotFound()
+			return nil, apperror.OrderNotFound()
 		}
-		return nil, apperrors.DatabaseError(err.Error())
+		return nil, apperror.ErrInternalServer.WithData(err.Error())
 	}
 	return &order, nil
 }
@@ -365,7 +365,7 @@ func (r *OrderRepositoryImpl) GetOrderByNo(orderNo string) (*Order, error) {
 func (r *OrderRepositoryImpl) UpdateOrder(order *Order) error {
 	err := r.db.Save(order).Error
 	if err != nil {
-		return apperrors.DatabaseError(err.Error())
+		return apperror.ErrInternalServer.WithData(err.Error())
 	}
 	return nil
 }
@@ -380,12 +380,12 @@ func (r *OrderRepositoryImpl) ListOrders(userID uint, offset, limit int) ([]*Ord
 	}
 
 	if err := query.Count(&total).Error; err != nil {
-		return nil, 0, apperrors.DatabaseError(err.Error())
+		return nil, 0, apperror.ErrInternalServer.WithData(err.Error())
 	}
 
 	err := query.Offset(offset).Limit(limit).Order("created_at DESC").Find(&orders).Error
 	if err != nil {
-		return nil, 0, apperrors.DatabaseError(err.Error())
+		return nil, 0, apperror.ErrInternalServer.WithData(err.Error())
 	}
 	return orders, total, nil
 }
@@ -397,12 +397,12 @@ func (r *OrderRepositoryImpl) ListOrdersByStatus(status string, offset, limit in
 	query := r.db.Model(&Order{}).Where("status = ?", status)
 
 	if err := query.Count(&total).Error; err != nil {
-		return nil, 0, apperrors.DatabaseError(err.Error())
+		return nil, 0, apperror.ErrInternalServer.WithData(err.Error())
 	}
 
 	err := query.Offset(offset).Limit(limit).Order("created_at DESC").Find(&orders).Error
 	if err != nil {
-		return nil, 0, apperrors.DatabaseError(err.Error())
+		return nil, 0, apperror.ErrInternalServer.WithData(err.Error())
 	}
 	return orders, total, nil
 }
@@ -425,13 +425,13 @@ func (r *ScoreRepositoryImpl) GetOrCreateScore(userID uint) (*Score, error) {
 	}
 
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, apperrors.DatabaseError(err.Error())
+		return nil, apperror.ErrInternalServer.WithData(err.Error())
 	}
 
 	score = Score{UserID: userID, Balance: 0}
 	err = r.db.Create(&score).Error
 	if err != nil {
-		return nil, apperrors.DatabaseError(err.Error())
+		return nil, apperror.ErrInternalServer.WithData(err.Error())
 	}
 	return &score, nil
 }
@@ -439,7 +439,7 @@ func (r *ScoreRepositoryImpl) GetOrCreateScore(userID uint) (*Score, error) {
 func (r *ScoreRepositoryImpl) UpdateScore(score *Score) error {
 	err := r.db.Save(score).Error
 	if err != nil {
-		return apperrors.DatabaseError(err.Error())
+		return apperror.ErrInternalServer.WithData(err.Error())
 	}
 	return nil
 }
@@ -447,7 +447,7 @@ func (r *ScoreRepositoryImpl) UpdateScore(score *Score) error {
 func (r *ScoreRepositoryImpl) CreateScoreLog(log *ScoreLog) error {
 	err := r.db.Create(log).Error
 	if err != nil {
-		return apperrors.DatabaseError(err.Error())
+		return apperror.ErrInternalServer.WithData(err.Error())
 	}
 	return nil
 }
@@ -459,12 +459,12 @@ func (r *ScoreRepositoryImpl) GetScoreLogs(userID uint, offset, limit int) ([]*S
 	query := r.db.Model(&ScoreLog{}).Where("user_id = ?", userID)
 
 	if err := query.Count(&total).Error; err != nil {
-		return nil, 0, apperrors.DatabaseError(err.Error())
+		return nil, 0, apperror.ErrInternalServer.WithData(err.Error())
 	}
 
 	err := query.Offset(offset).Limit(limit).Order("created_at DESC").Find(&logs).Error
 	if err != nil {
-		return nil, 0, apperrors.DatabaseError(err.Error())
+		return nil, 0, apperror.ErrInternalServer.WithData(err.Error())
 	}
 	return logs, total, nil
 }
@@ -499,10 +499,10 @@ func (r *ScoreRepositoryImpl) TransferScore(fromUserID, toUserID uint, amount in
 	if err := tx.Clauses(clause.OnConflict{UpdateAll: true}).Where("user_id = ?", fromUserID).First(&fromScore).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			tx.Rollback()
-			return apperrors.InsufficientBalance("积分余额不足")
+			return apperror.InsufficientBalance("积分余额不足")
 		}
 		tx.Rollback()
-		return apperrors.DatabaseError(err.Error())
+		return apperror.ErrInternalServer.WithData(err.Error())
 	}
 
 	// Lock and get receiver's score
@@ -513,18 +513,18 @@ func (r *ScoreRepositoryImpl) TransferScore(fromUserID, toUserID uint, amount in
 			toScore = Score{UserID: toUserID, Balance: 0}
 			if err := tx.Create(&toScore).Error; err != nil {
 				tx.Rollback()
-				return apperrors.DatabaseError(err.Error())
+				return apperror.ErrInternalServer.WithData(err.Error())
 			}
 		} else {
 			tx.Rollback()
-			return apperrors.DatabaseError(err.Error())
+			return apperror.ErrInternalServer.WithData(err.Error())
 		}
 	}
 
 	// Check balance
 	if fromScore.Balance < amount {
 		tx.Rollback()
-		return apperrors.InsufficientBalance("积分余额不足")
+		return apperror.InsufficientBalance("积分余额不足")
 	}
 
 	// Transfer
@@ -533,12 +533,12 @@ func (r *ScoreRepositoryImpl) TransferScore(fromUserID, toUserID uint, amount in
 
 	if err := tx.Save(&fromScore).Error; err != nil {
 		tx.Rollback()
-		return apperrors.DatabaseError(err.Error())
+		return apperror.ErrInternalServer.WithData(err.Error())
 	}
 
 	if err := tx.Save(&toScore).Error; err != nil {
 		tx.Rollback()
-		return apperrors.DatabaseError(err.Error())
+		return apperror.ErrInternalServer.WithData(err.Error())
 	}
 
 	// Create logs
@@ -551,7 +551,7 @@ func (r *ScoreRepositoryImpl) TransferScore(fromUserID, toUserID uint, amount in
 	}
 	if err := tx.Create(fromLog).Error; err != nil {
 		tx.Rollback()
-		return apperrors.DatabaseError(err.Error())
+		return apperror.ErrInternalServer.WithData(err.Error())
 	}
 
 	toLog := &ScoreLog{
@@ -563,12 +563,12 @@ func (r *ScoreRepositoryImpl) TransferScore(fromUserID, toUserID uint, amount in
 	}
 	if err := tx.Create(toLog).Error; err != nil {
 		tx.Rollback()
-		return apperrors.DatabaseError(err.Error())
+		return apperror.ErrInternalServer.WithData(err.Error())
 	}
 
 	// Commit transaction
 	if err := tx.Commit().Error; err != nil {
-		return apperrors.DatabaseError(err.Error())
+		return apperror.ErrInternalServer.WithData(err.Error())
 	}
 
 	return nil
