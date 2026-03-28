@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "target": "ES5",
+    "module": "none",
+    "lib": ["ES5"],
+    "outDir": "./dist/server",
+    "rootDir": "./server",
+    "strict": false,
+    "skipLibCheck": true,
+    "noEmit": false
+  },
+  "include": ["server/**/*"]
+}

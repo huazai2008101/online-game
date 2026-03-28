@@ -1,0 +1,14 @@
+{
+  "name": "blackjack",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Blackjack example game for the game platform",
+  "scripts": {
+    "build:server": "tsc -p tsconfig.json",
+    "dev:client": "cd client && npx vite --port 4000",
+    "build:client": "cd client && npx vite build"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.0"
+  }
+}

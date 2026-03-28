@@ -3,6 +3,7 @@ bin/
 *.exe
 *.test
 *.out
+api-gateway
 
 # IDE
 .vscode/
@@ -20,9 +21,21 @@ logs/
 
 # Temp
 tmp/
-data/
-uploads/
+
+# Data (keep structure, ignore content)
+data/games/*/
 
 # Coverage
 coverage.out
-coverage.html
+
+# SDK
+sdks/server-sdk/node_modules/
+sdks/server-sdk/dist/
+sdks/client-sdk/node_modules/
+sdks/client-sdk/dist/
+
+# Proto generated
+proto/*/gen/
+
+# Air
+.air.toml

@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>21点 - Blackjack</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #1a1a2e; color: #fff; min-height: 100vh; }
+    #app { max-width: 900px; margin: 0 auto; padding: 20px; }
+
+    h1 { text-align: center; font-size: 1.8em; margin-bottom: 20px; color: #e94560; }
+
+    .status-bar { text-align: center; padding: 10px; background: #16213e; border-radius: 8px; margin-bottom: 15px; font-size: 0.95em; }
+    .status-bar .chips { color: #f5c542; font-weight: bold; }
+
+    .dealer-area, .player-area { background: #0f3460; border-radius: 12px; padding: 15px; margin-bottom: 15px; }
+    .area-title { font-size: 0.85em; color: #aaa; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 1px; }
+
+    .hand { display: flex; gap: 8px; flex-wrap: wrap; min-height: 80px; align-items: center; }
+    .card {
+      width: 55px; height: 80px; background: #fff; color: #333; border-radius: 6px;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      font-size: 0.85em; font-weight: bold; box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+    }
+    .card.hidden { background: #533483; color: transparent; }
+    .card .suit { font-size: 1.2em; }
+    .card.red { color: #e94560; }
+
+    .hand-value { margin-top: 8px; font-size: 0.9em; color: #aaa; }
+
+    .players-area { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 15px; }
+    .player-card {
+      flex: 1; min-width: 120px; background: #16213e; border-radius: 8px; padding: 10px;
+      border: 2px solid transparent;
+    }
+    .player-card.active { border-color: #e94560; }
+    .player-card.busted { opacity: 0.5; }
+    .player-name { font-size: 0.85em; margin-bottom: 5px; }
+    .player-chips { font-size: 0.8em; color: #f5c542; }
+    .player-bet { font-size: 0.8em; color: #aaa; }
+    .player-result { font-size: 0.9em; font-weight: bold; margin-top: 5px; }
+    .player-result.win { color: #4ecca3; }
+    .player-result.lose { color: #e94560; }
+    .player-result.push { color: #f5c542; }
+
+    .actions { display: flex; gap: 10px; justify-content: center; margin-bottom: 15px; }
+    .btn {
+      padding: 10px 24px; border: none; border-radius: 8px; font-size: 1em;
+      cursor: pointer; font-weight: bold; transition: opacity 0.2s;
+    }
+    .btn:hover { opacity: 0.85; }
+    .btn:disabled { opacity: 0.3; cursor: not-allowed; }
+    .btn-hit { background: #4ecca3; color: #1a1a2e; }
+    .btn-stand { background: #e94560; color: #fff; }
+    .btn-double { background: #f5c542; color: #1a1a2e; }
+    .btn-bet { background: #533483; color: #fff; }
+    .btn-ready { background: #4ecca3; color: #1a1a2e; }
+    .btn-start { background: #e94560; color: #fff; }
+
+    .bet-panel { display: flex; gap: 8px; justify-content: center; align-items: center; margin-bottom: 15px; }
+    .bet-panel input { width: 80px; padding: 8px; border-radius: 6px; border: 1px solid #444; background: #16213e; color: #fff; text-align: center; font-size: 1em; }
+
+    .chat-area { background: #16213e; border-radius: 8px; padding: 10px; margin-top: 15px; max-height: 150px; overflow-y: auto; }
+    .chat-msg { font-size: 0.85em; margin-bottom: 4px; }
+    .chat-msg .nick { color: #4ecca3; }
+    .chat-input { display: flex; gap: 8px; margin-top: 8px; }
+    .chat-input input { flex: 1; padding: 6px 10px; border-radius: 6px; border: 1px solid #444; background: #0f3460; color: #fff; }
+
+    .notification { text-align: center; padding: 8px; background: #533483; border-radius: 6px; margin-bottom: 10px; font-size: 0.9em; display: none; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <h1>21点 Blackjack</h1>
+    <div id="notification" class="notification"></div>
+    <div class="status-bar">
+      状态: <span id="phase">等待中</span> |
+      底池: <span id="pot" class="chips">0</span> |
+      你的筹码: <span id="myChips" class="chips">1000</span>
+    </div>
+
+    <div class="dealer-area">
+      <div class="area-title">庄家</div>
+      <div id="dealerHand" class="hand"></div>
+      <div id="dealerValue" class="hand-value"></div>
+    </div>
+
+    <div id="playersArea" class="players-area"></div>
+
+    <div id="betPanel" class="bet-panel" style="display:none">
+      <span>下注:</span>
+      <input type="number" id="betAmount" value="50" min="10" max="500" step="10" />
+      <button class="btn btn-bet" onclick="placeBet()">下注</button>
+    </div>
+
+    <div id="actions" class="actions" style="display:none">
+      <button id="btnHit" class="btn btn-hit" onclick="hit()">要牌</button>
+      <button id="btnStand" class="btn btn-stand" onclick="stand()">停牌</button>
+      <button id="btnDouble" class="btn btn-double" onclick="doubleDown()">加倍</button>
+    </div>
+
+    <div id="waitingActions" class="actions" style="display:none">
+      <button class="btn btn-ready" onclick="ready()">准备</button>
+    </div>
+
+    <div class="chat-area">
+      <div id="chatMessages"></div>
+      <div class="chat-input">
+        <input type="text" id="chatInput" placeholder="发送消息..." onkeydown="if(event.key==='Enter')sendChat()" />
+        <button class="btn btn-bet" onclick="sendChat()" style="padding:6px 14px;font-size:0.85em">发送</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    // Game client using the platform's client SDK pattern
+    // In production, this would import from '@gameplatform/client-sdk'
+    // For this example, we use a lightweight inline implementation
+
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get('token') || '';
+    const gameId = params.get('gameId') || '';
+    const roomId = params.get('roomId') || '';
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${proto}//${location.host}/ws?token=${encodeURIComponent(token)}&gameId=${encodeURIComponent(gameId)}&roomId=${encodeURIComponent(roomId)}`;
+
+    let ws = null;
+    let myPlayerId = '';
+    let gameState = {};
+
+    function connect() {
+      ws = new WebSocket(wsUrl);
+      ws.onmessage = (e) => {
+        try {
+          const msg = JSON.parse(e.data);
+          handleMessage(msg);
+        } catch (err) { console.error('Parse error:', err); }
+      };
+      ws.onclose = () => {
+        showNotification('连接断开，3秒后重连...');
+        setTimeout(connect, 3000);
+      };
+      ws.onerror = () => {};
+    }
+
+    function send(type, data = {}) {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type, data, ts: Date.now() }));
+      }
+    }
+
+    function handleMessage(msg) {
+      const { type, data } = msg;
+      switch (type) {
+        case 'connected':
+          myPlayerId = data.playerId;
+          hideNotification();
+          break;
+        case 'player_join':
+          showNotification(`${data.nickname} 加入了房间`);
+          break;
+        case 'player_left':
+          showNotification(`${data.nickname} 离开了`);
+          break;
+        case 'betting_start':
+          showBetPanel();
+          break;
+        case 'player_bet':
+          showNotification(`${data.playerId === myPlayerId ? '你' : data.playerId} 下注 ${data.amount}`);
+          break;
+        case 'your_hand':
+          renderMyHand(data.hand, data.value);
+          break;
+        case 'state_update':
+          gameState = data;
+          renderPublicState(data);
+          break;
+        case 'your_turn':
+          showActions(data.playerId === myPlayerId);
+          break;
+        case 'card_dealt':
+          addCardToHand(data.card);
+          break;
+        case 'player_busted':
+          if (data.playerId === myPlayerId) showNotification('爆牌了！');
+          break;
+        case 'player_stood':
+          showNotification(`${data.playerId === myPlayerId ? '你' : data.playerId} 停牌 (${data.value})`);
+          break;
+        case 'player_doubled':
+          showNotification(`${data.playerId === myPlayerId ? '你' : data.playerId} 加倍！`);
+          break;
+        case 'dealer_reveal':
+          renderDealerHand(data.hand, data.value);
+          break;
+        case 'dealer_hit':
+          addDealerCard(data.card, data.value);
+          break;
+        case 'round_result':
+          renderResult(data);
+          break;
+        case 'chat':
+          addChatMsg(data.nickname || data.from, data.message);
+          break;
+        case 'error':
+          showNotification('错误: ' + data.message);
+          break;
+      }
+    }
+
+    // ===== UI Rendering =====
+
+    function showNotification(text) {
+      const el = document.getElementById('notification');
+      el.textContent = text;
+      el.style.display = 'block';
+      clearTimeout(el._timer);
+      el._timer = setTimeout(() => { el.style.display = 'none'; }, 3000);
+    }
+
+    function hideNotification() {
+      document.getElementById('notification').style.display = 'none';
+    }
+
+    function cardHTML(card, hidden = false) {
+      if (hidden) return '<div class="card hidden">?</div>';
+      const parts = card.split('_of_');
+      const rank = parts[0];
+      const suit = parts[1];
+      const suitSymbol = { hearts: '♥', diamonds: '♦', clubs: '♣', spades: '♠' }[suit] || suit;
+      const isRed = suit === 'hearts' || suit === 'diamonds';
+      return `<div class="card ${isRed ? 'red' : ''}"><span class="suit">${suitSymbol}</span><span>${rank}</span></div>`;
+    }
+
+    let myHand = [];
+    let myHandValue = 0;
+
+    function renderMyHand(hand, value) {
+      myHand = hand;
+      myHandValue = value;
+      // Render in the players area
+      updatePlayersArea();
+    }
+
+    function addCardToHand(card) {
+      myHand.push(card);
+      const state = gameState;
+      // Recalculate value from state if available
+      updatePlayersArea();
+    }
+
+    let dealerCards = [];
+
+    function renderDealerHand(hand, value) {
+      dealerCards = hand;
+      const el = document.getElementById('dealerHand');
+      el.innerHTML = hand.map(c => cardHTML(c)).join('');
+      document.getElementById('dealerValue').textContent = `点数: ${value}`;
+    }
+
+    function addDealerCard(card, value) {
+      dealerCards.push(card);
+      const el = document.getElementById('dealerHand');
+      el.innerHTML = dealerCards.map(c => cardHTML(c)).join('');
+      document.getElementById('dealerValue').textContent = `点数: ${value}`;
+    }
+
+    function renderPublicState(state) {
+      document.getElementById('phase').textContent = phaseLabel(state.phase);
+      document.getElementById('pot').textContent = state.pot;
+
+      // Show dealer up card
+      if (state.dealerUpCard && dealerCards.length === 0) {
+        document.getElementById('dealerHand').innerHTML = cardHTML(state.dealerUpCard) + cardHTML(null, true);
+        document.getElementById('dealerValue').textContent = '点数: ?';
+      }
+
+      updatePlayersArea(state);
+    }
+
+    function updatePlayersArea(state) {
+      if (!state) state = gameState;
+      const container = document.getElementById('playersArea');
+      if (!state.players || state.players.length === 0) {
+        container.innerHTML = '<div style="color:#aaa;text-align:center;padding:20px">等待玩家加入...</div>';
+        return;
+      }
+
+      container.innerHTML = state.players.map(p => {
+        const isMe = p.playerId === myPlayerId;
+        const isActive = state.currentPlayer === p.playerId;
+        let handStr = '';
+        if (isMe && myHand.length > 0) {
+          handStr = `<div class="hand">${myHand.map(c => cardHTML(c)).join('')}</div>
+                     <div class="hand-value">点数: ${myHandValue}</div>`;
+        }
+        let resultStr = '';
+        if (p.result) {
+          const cls = p.result === 'win' ? 'win' : p.result === 'lose' ? 'lose' : 'push';
+          resultStr = `<div class="player-result ${cls}">${resultLabel(p.result)}</div>`;
+        }
+        return `<div class="player-card ${isActive ? 'active' : ''} ${p.busted ? 'busted' : ''}">
+          <div class="player-name">${isMe ? '👤 你' : p.playerId} ${isActive ? '◀' : ''}</div>
+          <div class="player-chips">筹码: ${p.chips}</div>
+          <div class="player-bet">下注: ${p.bet}</div>
+          ${p.cardCount ? `<div style="font-size:0.8em;color:#aaa">${p.cardCount}张牌 ${p.stood ? '(停牌)' : ''} ${p.busted ? '(爆牌)' : ''}</div>` : ''}
+          ${handStr}
+          ${resultStr}
+        </div>`;
+      }).join('');
+    }
+
+    function renderResult(data) {
+      document.getElementById('myChips').textContent =
+        data.scores[myPlayerId] !== undefined ? data.scores[myPlayerId] : '---';
+
+      const container = document.getElementById('playersArea');
+      container.innerHTML = data.players.map(p => {
+        const isMe = p.playerId === myPlayerId;
+        const cls = p.result === 'win' ? 'win' : p.result === 'lose' ? 'lose' : 'push';
+        return `<div class="player-card">
+          <div class="player-name">${isMe ? '👤 你' : p.playerId}</div>
+          <div>点数: ${p.handValue}</div>
+          <div class="player-result ${cls}">${resultLabel(p.result)} | 筹码: ${p.chips}</div>
+        </div>`;
+      }).join('');
+
+      renderDealerHand(
+        data.dealerHand || [],
+        data.dealerValue
+      );
+
+      showNotification(`庄家: ${data.dealerValue}${data.dealerBusted ? ' (爆牌!)' : ''} — ${data.winners.length > 0 ? data.winners.join(',') + ' 赢了!' : '平局!'}`);
+      hideActions();
+      hideBetPanel();
+    }
+
+    function phaseLabel(phase) {
+      const labels = { waiting: '等待中', betting: '下注中', playing: '游戏中', dealer: '庄家回合', ended: '已结束' };
+      return labels[phase] || phase;
+    }
+
+    function resultLabel(result) {
+      const labels = { win: '赢', lose: '输', push: '平' };
+      return labels[result] || result;
+    }
+
+    // ===== Actions =====
+
+    function showBetPanel() {
+      document.getElementById('betPanel').style.display = 'flex';
+      hideActions();
+    }
+
+    function hideBetPanel() {
+      document.getElementById('betPanel').style.display = 'none';
+    }
+
+    function showActions(isMyTurn) {
+      document.getElementById('actions').style.display = isMyTurn ? 'flex' : 'none';
+      document.getElementById('btnDouble').disabled = myHand.length !== 2;
+    }
+
+    function hideActions() {
+      document.getElementById('actions').style.display = 'none';
+    }
+
+    window.placeBet = function() {
+      const amount = parseInt(document.getElementById('betAmount').value) || 50;
+      send('action', { action: 'bet', data: { amount } });
+      hideBetPanel();
+    };
+
+    window.hit = function() { send('action', { action: 'hit', data: {} }); };
+    window.stand = function() { send('action', { action: 'stand', data: {} }); };
+    window.doubleDown = function() { send('action', { action: 'double', data: {} }); };
+    window.ready = function() { send('ready', {}); };
+    window.sendChat = function() {
+      const input = document.getElementById('chatInput');
+      if (input.value.trim()) {
+        send('chat', { message: input.value.trim() });
+        input.value = '';
+      }
+    };
+
+    function addChatMsg(nick, msg) {
+      const el = document.getElementById('chatMessages');
+      el.innerHTML += `<div class="chat-msg"><span class="nick">${nick}:</span> ${msg}</div>`;
+      el.scrollTop = el.scrollHeight;
+    }
+
+    // Start
+    connect();
+  </script>
+</body>
+</html>

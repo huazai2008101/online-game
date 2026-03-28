@@ -1,183 +1,163 @@
-// Package actor implements the Actor model for concurrent message processing
-// The Actor model provides:
-// - Lock-free concurrency through message passing
-// - High performance and low latency
-// - Easy to test and scale
 package actor
 
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
-	"time"
+	"sync/atomic"
 )
 
-// Message is the interface for all actor messages
-type Message interface{}
-
-// Actor is the interface for all actors
+// Actor is the interface that all actors must implement.
 type Actor interface {
-	// Receive processes a message
-	Receive(ctx context.Context, msg Message) error
-
-	// Send sends a message to the actor
-	Send(msg Message) error
-
-	// Start starts the actor's message processing loop
-	Start(ctx context.Context) error
-
-	// Stop gracefully stops the actor
-	Stop() error
-
-	// ID returns the actor's unique identifier
 	ID() string
-
-	// Type returns the actor's type
-	Type() string
-
-	// Stats returns the actor's statistics
-	Stats() *ActorStats
+	Send(msg *Message) error
+	Stop(ctx context.Context) error
 }
 
-// ActorStats holds statistics about an actor
-type ActorStats struct {
-	MessageCount  int64
-	ProcessTime   time.Duration
-	ErrorCount    int64
-	LastErrorTime time.Time
-	mu            sync.RWMutex
-}
+// MessageHandler processes a single message.
+type MessageHandler func(msg *Message) error
 
-// BaseActor provides a base implementation of the Actor interface
+// BaseActor provides the core actor behavior: a single goroutine
+// processing messages from an inbox channel sequentially.
+// No locks are needed because all state is accessed only from the run goroutine.
 type BaseActor struct {
-	id        string
-	actorType string
-	inbox     chan Message
-	ctx       context.Context
-	cancel    context.CancelFunc
-	wg        sync.WaitGroup
-	stats     ActorStats
-	handler   MessageHandler
+	id       string
+	inbox    chan *Message
+	handler  MessageHandler
+	ctx      context.Context
+	cancel   context.CancelFunc
+	wg       sync.WaitGroup
+	running  atomic.Bool
+	inboxCap int
+
+	// Stats
+	processed atomic.Int64
+	errors    atomic.Int64
 }
 
-// MessageHandler handles incoming messages
-type MessageHandler func(ctx context.Context, msg Message) error
-
-// NewActor creates a new BaseActor
-func NewActor(id, actorType string, inboxSize int, handler MessageHandler) *BaseActor {
+// NewBaseActor creates a new base actor with the given inbox capacity.
+// The handler will be called for each message on a single goroutine.
+func NewBaseActor(id string, handler MessageHandler, inboxCap int) *BaseActor {
+	if inboxCap <= 0 {
+		inboxCap = 256
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &BaseActor{
-		id:        id,
-		actorType: actorType,
-		inbox:     make(chan Message, inboxSize),
-		ctx:       ctx,
-		cancel:    cancel,
-		handler:   handler,
+		id:       id,
+		inbox:    make(chan *Message, inboxCap),
+		handler:  handler,
+		ctx:      ctx,
+		cancel:   cancel,
+		inboxCap: inboxCap,
 	}
 }
 
-// Start starts the actor's message processing loop
-func (a *BaseActor) Start(ctx context.Context) error {
+// Start launches the actor's message processing goroutine.
+func (a *BaseActor) Start() {
+	if !a.running.CompareAndSwap(false, true) {
+		return // already running
+	}
 	a.wg.Add(1)
-	go a.run(ctx)
-	return nil
+	go a.run()
 }
 
-// run is the main message processing loop
-func (a *BaseActor) run(ctx context.Context) {
+// run is the core processing loop. Single goroutine, no locks.
+func (a *BaseActor) run() {
 	defer a.wg.Done()
+	defer a.running.Store(false)
 
+	for {
+		select {
+		case msg, ok := <-a.inbox:
+			if !ok {
+				return // inbox closed
+			}
+			a.processMessage(msg)
+
+		case <-a.ctx.Done():
+			a.drain()
+			return
+		}
+	}
+}
+
+// processMessage handles a single message with panic recovery.
+func (a *BaseActor) processMessage(msg *Message) {
+	defer func() {
+		if r := recover(); r != nil {
+			a.errors.Add(1)
+			slog.Error("actor panic",
+				"actor_id", a.id,
+				"msg_type", msg.Type,
+				"panic", r,
+			)
+		}
+	}()
+
+	if err := a.handler(msg); err != nil {
+		a.errors.Add(1)
+		slog.Error("actor handler error",
+			"actor_id", a.id,
+			"msg_type", msg.Type,
+			"error", err,
+		)
+	}
+	a.processed.Add(1)
+}
+
+// drain processes any remaining messages in the inbox.
+func (a *BaseActor) drain() {
 	for {
 		select {
 		case msg, ok := <-a.inbox:
 			if !ok {
 				return
 			}
-			start := time.Now()
-			err := a.Receive(ctx, msg)
-			duration := time.Since(start)
-
-			a.stats.mu.Lock()
-			a.stats.ProcessTime += duration
-			a.stats.MessageCount++
-			if err != nil {
-				a.stats.ErrorCount++
-				a.stats.LastErrorTime = time.Now()
-			}
-			a.stats.mu.Unlock()
-
-		case <-ctx.Done():
+			a.processMessage(msg)
+		default:
 			return
 		}
 	}
 }
 
-// Receive processes a message using the registered handler
-func (a *BaseActor) Receive(ctx context.Context, msg Message) error {
-	if a.handler == nil {
-		return fmt.Errorf("no message handler registered for actor %s", a.id)
+// Send delivers a message to the inbox (non-blocking).
+func (a *BaseActor) Send(msg *Message) error {
+	if !a.running.Load() {
+		return fmt.Errorf("actor %s: not running", a.id)
 	}
-	return a.handler(ctx, msg)
-}
-
-// Send sends a message to the actor
-func (a *BaseActor) Send(msg Message) error {
 	select {
 	case a.inbox <- msg:
 		return nil
 	default:
-		return fmt.Errorf("actor %s inbox is full", a.id)
+		return fmt.Errorf("actor %s: inbox full (%d)", a.id, a.inboxCap)
 	}
 }
 
-// SendWithContext sends a message with context cancellation support
-func (a *BaseActor) SendWithContext(ctx context.Context, msg Message) error {
+// Stop gracefully stops the actor, waiting for in-flight messages.
+func (a *BaseActor) Stop(ctx context.Context) error {
+	a.cancel()
+	done := make(chan struct{})
+	go func() {
+		a.wg.Wait()
+		close(done)
+	}()
+
 	select {
-	case a.inbox <- msg:
+	case <-done:
 		return nil
 	case <-ctx.Done():
-		return ctx.Err()
+		return fmt.Errorf("actor %s: shutdown timed out", a.id)
 	}
 }
 
-// Stop gracefully stops the actor
-func (a *BaseActor) Stop() error {
-	a.cancel() // Signal the run loop to stop
+// ID returns the actor's unique identifier.
+func (a *BaseActor) ID() string { return a.id }
 
-	// Close inbox if not already closed
-	select {
-	case <-a.inbox:
-		// Channel is already closed
-	default:
-		close(a.inbox)
-	}
-
-	a.wg.Wait() // Wait for run to complete
-	return nil
+// Stats returns current actor statistics.
+func (a *BaseActor) Stats() (processed, errors int64) {
+	return a.processed.Load(), a.errors.Load()
 }
 
-// ID returns the actor's unique identifier
-func (a *BaseActor) ID() string {
-	return a.id
-}
-
-// Type returns the actor's type
-func (a *BaseActor) Type() string {
-	return a.actorType
-}
-
-// Stats returns the actor's statistics
-func (a *BaseActor) Stats() *ActorStats {
-	return &a.stats
-}
-
-// GetAverageProcessTime returns the average message processing time
-func (a *BaseActor) GetAverageProcessTime() time.Duration {
-	a.stats.mu.RLock()
-	defer a.stats.mu.RUnlock()
-
-	if a.stats.MessageCount == 0 {
-		return 0
-	}
-	return a.stats.ProcessTime / time.Duration(a.stats.MessageCount)
-}
+// IsRunning reports whether the actor is active.
+func (a *BaseActor) IsRunning() bool { return a.running.Load() }

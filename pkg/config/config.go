@@ -1,138 +1,112 @@
-// Package config provides configuration management for all services
 package config
 
-import (
-	"fmt"
-	"os"
-	"strconv"
-	"time"
-)
+import "os"
 
-// Config holds the configuration for a service
+// Config holds all configuration for a service.
 type Config struct {
-	// Service configuration
 	ServiceName string
-	Environment string
+	Env         string
 	Host        string
-	Port        int
+	Port        string
+	GRPCPort    string
 
-	// Database configuration
 	Database DatabaseConfig
-
-	// Redis configuration
-	Redis RedisConfig
-
-	// Kafka configuration (optional)
-	Kafka KafkaConfig
-
-	// Logging configuration
+	Redis    RedisConfig
 	LogLevel string
 }
 
-// DatabaseConfig holds database configuration
+// DatabaseConfig holds PostgreSQL connection settings.
 type DatabaseConfig struct {
-	Host            string
-	Port            int
-	User            string
-	Password        string
-	Database        string
-	SSLMode         string
-	MaxOpenConns    int
-	MaxIdleConns    int
-	ConnMaxLifetime time.Duration
+	Host     string
+	Port     string
+	User     string
+	Password string
+	DBName   string
+	SSLMode  string
 }
 
-// RedisConfig holds Redis configuration
+// RedisConfig holds Redis connection settings.
 type RedisConfig struct {
 	Host     string
-	Port     int
+	Port     string
 	Password string
 	DB       int
-	PoolSize int
 }
 
-// KafkaConfig holds Kafka configuration
-type KafkaConfig struct {
-	Brokers []string
-	GroupID string
-}
-
-// Load loads configuration from environment variables
+// Load reads configuration from environment variables.
 func Load(serviceName string) *Config {
 	return &Config{
 		ServiceName: serviceName,
-		Environment: getEnv("ENV", "development"),
-		Host:        getEnv("HOST", "0.0.0.0"),
-		Port:        getEnvInt("PORT", 8000),
-		LogLevel:    getEnv("LOG_LEVEL", "info"),
-
+		Env:         envOr("ENV", "development"),
+		Host:        envOr("HOST", "0.0.0.0"),
+		Port:        envOr("PORT", defaultPort(serviceName)),
+		GRPCPort:    envOr("GRPC_PORT", defaultGRPCPort(serviceName)),
+		LogLevel:    envOr("LOG_LEVEL", "info"),
 		Database: DatabaseConfig{
-			Host:            getEnv("DB_HOST", "192.168.3.78"),
-			Port:            getEnvInt("DB_PORT", 5432),
-			User:            getEnv("DB_USER", "postgres"),
-			Password:        getEnv("DB_PASSWORD", "6283213"),
-			Database:        getEnv("DB_NAME", "game_platform_db"),
-			SSLMode:         getEnv("DB_SSLMODE", "disable"),
-			MaxOpenConns:    getEnvInt("DB_MAX_OPEN", 25),
-			MaxIdleConns:    getEnvInt("DB_MAX_IDLE", 10),
-			ConnMaxLifetime: time.Duration(getEnvInt("DB_CONN_LIFETIME", 300)) * time.Second,
+			Host:     envOr("DB_HOST", "localhost"),
+			Port:     envOr("DB_PORT", "5432"),
+			User:     envOr("DB_USER", "postgres"),
+			Password: envOr("DB_PASSWORD", ""),
+			DBName:   envOr("DB_NAME", serviceName),
+			SSLMode:  envOr("DB_SSL_MODE", "disable"),
 		},
-
 		Redis: RedisConfig{
-			Host:     getEnv("REDIS_HOST", "localhost"),
-			Port:     getEnvInt("REDIS_PORT", 6379),
-			Password: getEnv("REDIS_PASSWORD", ""),
-			DB:       getEnvInt("REDIS_DB", 0),
-			PoolSize: getEnvInt("REDIS_POOL_SIZE", 100),
-		},
-
-		Kafka: KafkaConfig{
-			Brokers: []string{getEnv("KAFKA_BROKERS", "localhost:9092")},
-			GroupID: getEnv("KAFKA_GROUP_ID", serviceName),
+			Host:     envOr("REDIS_HOST", "localhost"),
+			Port:     envOr("REDIS_PORT", "6379"),
+			Password: envOr("REDIS_PASSWORD", ""),
+			DB:       0,
 		},
 	}
 }
 
-// GetDSN returns the database connection string
-func (c *DatabaseConfig) GetDSN() string {
-	return fmt.Sprintf(
-		"host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
-		c.Host, c.Port, c.User, c.Password, c.Database, c.SSLMode,
-	)
-}
-
-// GetRedisAddr returns the Redis address
-func (c *RedisConfig) GetRedisAddr() string {
-	return fmt.Sprintf("%s:%d", c.Host, c.Port)
-}
-
-// GetAddr returns the service address
-func (c *Config) GetAddr() string {
-	return fmt.Sprintf("%s:%d", c.Host, c.Port)
-}
-
-// IsProduction returns true if running in production
-func (c *Config) IsProduction() bool {
-	return c.Environment == "production"
-}
-
-// IsDevelopment returns true if running in development
+// IsDevelopment reports whether we're running in dev mode.
 func (c *Config) IsDevelopment() bool {
-	return c.Environment == "development"
+	return c.Env == "development"
 }
 
-func getEnv(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return defaultValue
+// DSN returns the PostgreSQL connection string.
+func (c *Config) DSN() string {
+	return "host=" + c.Database.Host +
+		" port=" + c.Database.Port +
+		" user=" + c.Database.User +
+		" password=" + c.Database.Password +
+		" dbname=" + c.Database.DBName +
+		" sslmode=" + c.Database.SSLMode
 }
 
-func getEnvInt(key string, defaultValue int) int {
-	if value := os.Getenv(key); value != "" {
-		if intVal, err := strconv.Atoi(value); err == nil {
-			return intVal
-		}
+// RedisAddr returns the Redis address.
+func (c *Config) RedisAddr() string {
+	return c.Redis.Host + ":" + c.Redis.Port
+}
+
+func envOr(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
 	}
-	return defaultValue
+	return fallback
+}
+
+func defaultPort(serviceName string) string {
+	ports := map[string]string{
+		"api-gateway":   "8080",
+		"user-service":  "8001",
+		"game-service":  "8002",
+		"admin-service": "8003",
+	}
+	if p, ok := ports[serviceName]; ok {
+		return p
+	}
+	return "8000"
+}
+
+func defaultGRPCPort(serviceName string) string {
+	ports := map[string]string{
+		"user-service":  "9001",
+		"game-service":  "9002",
+		"admin-service": "9003",
+	}
+	if p, ok := ports[serviceName]; ok {
+		return p
+	}
+	return "9000"
 }

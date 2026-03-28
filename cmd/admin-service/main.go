@@ -3,22 +3,21 @@ package main
 import (
 	"log/slog"
 	"os"
-	"time"
+	"path/filepath"
 
 	"github.com/gin-gonic/gin"
 
+	"online-game/internal/admin"
 	"online-game/internal/server"
-	"online-game/internal/user"
-	"online-game/pkg/auth"
 	"online-game/pkg/config"
 	"online-game/pkg/db"
 )
 
 func main() {
-	cfg := config.Load("user-service")
+	cfg := config.Load("admin-service")
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, nil)))
 
-	slog.Info("starting user-service", "port", cfg.Port)
+	slog.Info("starting admin-service", "port", cfg.Port)
 
 	database, err := db.New(&cfg.Database)
 	if err != nil {
@@ -27,17 +26,19 @@ func main() {
 	}
 	defer db.Close(database)
 
-	jwtManager := auth.NewJWTManager(auth.DefaultSecret(), 24*7*time.Hour)
+	storagePath := filepath.Join(".", "data", "games")
+	os.MkdirAll(storagePath, 0755)
 
-	userSvc := user.NewService(database, jwtManager)
-	userSvc.Migrate()
+	adminSvc := admin.NewService(database, storagePath)
+	adminSvc.Migrate()
 
-	userHandler := user.NewHandler(userSvc)
+	adminHandler := admin.NewHandler(adminSvc)
 
 	srv := server.New(&server.ServerConfig{Host: cfg.Host, Port: cfg.Port, Env: cfg.Env})
-	userHandler.RegisterRoutes(srv.Router().Group("/api/v1"))
+	adminHandler.RegisterRoutes(srv.Router().Group("/api/v1"))
+	srv.Router().Static("/game-assets", storagePath)
 	srv.Router().GET("/health", func(c *gin.Context) {
-		c.JSON(200, gin.H{"status": "ok", "service": "user-service"})
+		c.JSON(200, gin.H{"status": "ok", "service": "admin-service"})
 	})
 
 	go srv.Start()

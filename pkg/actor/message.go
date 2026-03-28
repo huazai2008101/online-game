@@ -1,148 +1,70 @@
 package actor
 
-// ==================== Game Related Messages ====================
+import "time"
 
-// GameStartMessage signals a game to start
-type GameStartMessage struct {
-	GameID    string
-	RoomID    string
-	Players   []string
-	Timestamp int64
-}
+// MsgType defines the type of message sent to actors.
+type MsgType int
 
-// GameTickMessage represents a game tick
-type GameTickMessage struct {
-	Timestamp int64
-	TickCount int64
-	DeltaTime float64
-}
+const (
+	MsgPlayerJoin  MsgType = iota + 1 // 玩家加入房间
+	MsgPlayerLeave                     // 玩家离开房间
+	MsgPlayerReady                     // 玩家准备
+	MsgPlayerAction                    // 玩家游戏操作
+	MsgGameStart                       // 开始游戏
+	MsgGameTick                        // 游戏帧（实时游戏用）
+	MsgTimer                           // 定时器回调
+	MsgRestore                         // 状态恢复（断线重连）
+	MsgShutdown                        // 关闭 Actor
+)
 
-// GameStopMessage signals a game to stop
-type GameStopMessage struct {
-	Reason  string
-	GameID  string
-	RoomID  string
-}
-
-// GameStateUpdateMessage updates the game state
-type GameStateUpdateMessage struct {
-	GameID string
-	RoomID string
-	State  interface{}
-	Tick   int64
-}
-
-// ==================== Player Related Messages ====================
-
-// PlayerJoinMessage signals a player joining a game
-type PlayerJoinMessage struct {
-	PlayerID   string
-	PlayerName string
-	PlayerData map[string]interface{}
-	GameID     string
-	RoomID     string
-}
-
-// PlayerLeaveMessage signals a player leaving a game
-type PlayerLeaveMessage struct {
+// Message is the unit of communication between actors.
+// All messages are processed sequentially by the receiving actor's goroutine.
+type Message struct {
+	Type     MsgType
 	PlayerID string
-	Reason   string
-	GameID   string
-	RoomID   string
+	Action   string    // for MsgPlayerAction: the action name (e.g. "bet", "fold")
+	Data     any       // payload, type depends on MsgType
+	Time     time.Time // when the message was created
 }
 
-// PlayerActionMessage represents a player action
-type PlayerActionMessage struct {
-	PlayerID string
-	Action   string
-	Data     interface{}
-	GameID   string
-	RoomID   string
-	Timestamp int64
+// NewMessage creates a new message with the current timestamp.
+func NewMessage(msgType MsgType, playerID string, data any) *Message {
+	return &Message{
+		Type:     msgType,
+		PlayerID: playerID,
+		Data:     data,
+		Time:     time.Now(),
+	}
 }
 
-// PlayerStateMessage updates player state
-type PlayerStateMessage struct {
-	PlayerID string
-	State    map[string]interface{}
+// ActionMessage creates a player action message.
+func ActionMessage(playerID, action string, data any) *Message {
+	return &Message{
+		Type:     MsgPlayerAction,
+		PlayerID: playerID,
+		Action:   action,
+		Data:     data,
+		Time:     time.Now(),
+	}
 }
 
-// ==================== Room Related Messages ====================
+// --- Payload types for specific message types ---
 
-// RoomCreateMessage creates a new room
-type RoomCreateMessage struct {
-	RoomID     string
-	GameID     string
-	MaxPlayers int
-	Config     map[string]interface{}
+// PlayerJoinData carries player join information.
+type PlayerJoinData struct {
+	Nickname string
+	Avatar   string
+	Metadata map[string]any
 }
 
-// RoomJoinMessage joins a room
-type RoomJoinMessage struct {
-	RoomID   string
-	PlayerID string
+// PlayerLeaveData carries player leave reason.
+type PlayerLeaveData struct {
+	Reason string // "disconnect", "voluntary", "kicked"
 }
 
-// RoomLeaveMessage leaves a room
-type RoomLeaveMessage struct {
-	RoomID   string
-	PlayerID string
-}
-
-// RoomCloseMessage closes a room
-type RoomCloseMessage struct {
-	RoomID string
-	Reason string
-}
-
-// ==================== System Messages ====================
-
-// PingMessage is a health check message
-type PingMessage struct {
-	Timestamp int64
-}
-
-// PongMessage is the response to a ping
-type PongMessage struct {
-	Timestamp    int64
-	OriginalTime int64
-}
-
-// ShutdownMessage signals the actor to shut down
-type ShutdownMessage struct {
-	Reason string
-}
-
-// ==================== Broadcast Messages ====================
-
-// BroadcastMessage sends a message to all players in a room
-type BroadcastMessage struct {
-	RoomID    string
-	Message   interface{}
-	ExcludeID string
-}
-
-// PrivateMessage sends a message to a specific player
-type PrivateMessage struct {
-	PlayerID string
-	Message  interface{}
-}
-
-// ==================== Engine Messages ====================
-
-// EngineSwitchMessage switches the game engine
-type EngineSwitchMessage struct {
-	EngineType string
-	Reason     string
-}
-
-// EngineExecuteMessage executes code on the engine
-type EngineExecuteMessage struct {
-	Method string
-	Args   interface{}
-}
-
-// EngineStatsMessage requests engine statistics
-type EngineStatsMessage struct {
-	IncludeDetails bool
+// TimerData carries timer callback information.
+type TimerData struct {
+	ID   int
+	Fn   any // goja.Value — stored as any to avoid import cycle
+	Once bool
 }

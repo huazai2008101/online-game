@@ -1,176 +1,72 @@
 package main
 
 import (
-	"context"
-	"fmt"
-	"log"
+	"log/slog"
+	"net/http/httputil"
+	"net/url"
 	"os"
-	"os/signal"
-	"syscall"
-	"time"
+	"strings"
 
-	"online-game/internal/gateway"
+	"github.com/gin-gonic/gin"
+
+	"online-game/internal/server"
+	"online-game/pkg/config"
 )
 
 func main() {
-	// Load configuration
-	config := loadConfig()
+	cfg := config.Load("api-gateway")
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, nil)))
 
-	// Create gateway
-	gw := gateway.NewGateway(config)
+	slog.Info("starting api-gateway", "port", cfg.Port)
 
-	// Register backends
-	registerBackends(gw)
+	srv := server.New(&server.ServerConfig{Host: cfg.Host, Port: cfg.Port, Env: cfg.Env})
+	r := srv.Router()
 
-	// Start server in goroutine
-	go func() {
-		if err := gw.Start(); err != nil {
-			log.Fatalf("Failed to start gateway: %v", err)
+	r.GET("/health", func(c *gin.Context) {
+		c.JSON(200, gin.H{"status": "ok", "service": "api-gateway"})
+	})
+
+	// Service backends (configurable via env)
+	backends := map[string]string{
+		"users": envOr("USER_SERVICE_URL", "http://localhost:8001"),
+		"auth":  envOr("USER_SERVICE_URL", "http://localhost:8001"),
+		"games": envOr("GAME_SERVICE_URL", "http://localhost:8002"),
+		"rooms": envOr("GAME_SERVICE_URL", "http://localhost:8002"),
+		"admin": envOr("ADMIN_SERVICE_URL", "http://localhost:8003"),
+	}
+
+	// Reverse proxy: /api/v1/{service}/*path -> service backend
+	r.Any("/api/v1/*path", func(c *gin.Context) {
+		path := strings.TrimPrefix(c.Param("path"), "/")
+		segments := strings.SplitN(path, "/", 2)
+		if len(segments) == 0 || segments[0] == "" {
+			c.JSON(400, gin.H{"error": "invalid path"})
+			return
 		}
-	}()
 
-	log.Printf("API Gateway started on port %d", config.Port)
-	log.Println("Health check: http://localhost:8080/health")
-
-	// Wait for interrupt signal
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
-
-	log.Println("Shutting down gateway...")
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	if err := gw.Shutdown(ctx); err != nil {
-		log.Fatalf("Gateway shutdown failed: %v", err)
-	}
-
-	log.Println("Gateway stopped")
-}
-
-func loadConfig() *gateway.Config {
-	return &gateway.Config{
-		Port:            getEnvInt("PORT", 8080),
-		Mode:            getEnv("MODE", "release"),
-		ReadTimeout:     10 * time.Second,
-		WriteTimeout:    10 * time.Second,
-		ShutdownTimeout: 30 * time.Second,
-		TracingEnabled:  true,
-		MetricsEnabled:  true,
-	}
-}
-
-func registerBackends(gw *gateway.Gateway) {
-	backends := []*gateway.ServiceBackend{
-		{
-			Name:      "user-service",
-			Prefix:    "/api/v1/users",
-			TargetURL: getEnv("USER_SERVICE_URL", "http://localhost:8001"),
-			KeepAlive: 30 * time.Second,
-			MaxIdle:   100,
-		},
-		{
-			Name:      "game-service",
-			Prefix:    "/api/v1/games",
-			TargetURL: getEnv("GAME_SERVICE_URL", "http://localhost:8002"),
-			KeepAlive: 30 * time.Second,
-			MaxIdle:   100,
-		},
-		{
-			Name:      "payment-service",
-			Prefix:    "/api/v1/payments",
-			TargetURL: getEnv("PAYMENT_SERVICE_URL", "http://localhost:8003"),
-			KeepAlive: 30 * time.Second,
-			MaxIdle:   100,
-		},
-		{
-			Name:      "player-service",
-			Prefix:    "/api/v1/players",
-			TargetURL: getEnv("PLAYER_SERVICE_URL", "http://localhost:8004"),
-			KeepAlive: 30 * time.Second,
-			MaxIdle:   100,
-		},
-		{
-			Name:      "activity-service",
-			Prefix:    "/api/v1/activities",
-			TargetURL: getEnv("ACTIVITY_SERVICE_URL", "http://localhost:8005"),
-			KeepAlive: 30 * time.Second,
-			MaxIdle:   100,
-		},
-		{
-			Name:      "guild-service",
-			Prefix:    "/api/v1/guilds",
-			TargetURL: getEnv("GUILD_SERVICE_URL", "http://localhost:8006"),
-			KeepAlive: 30 * time.Second,
-			MaxIdle:   100,
-		},
-		{
-			Name:      "item-service",
-			Prefix:    "/api/v1/items",
-			TargetURL: getEnv("ITEM_SERVICE_URL", "http://localhost:8007"),
-			KeepAlive: 30 * time.Second,
-			MaxIdle:   100,
-		},
-		{
-			Name:      "notification-service",
-			Prefix:    "/api/v1/notifications",
-			TargetURL: getEnv("NOTIFICATION_SERVICE_URL", "http://localhost:8008"),
-			KeepAlive: 30 * time.Second,
-			MaxIdle:   100,
-		},
-		{
-			Name:      "organization-service",
-			Prefix:    "/api/v1/organizations",
-			TargetURL: getEnv("ORGANIZATION_SERVICE_URL", "http://localhost:8009"),
-			KeepAlive: 30 * time.Second,
-			MaxIdle:   100,
-		},
-		{
-			Name:      "permission-service",
-			Prefix:    "/api/v1/permissions",
-			TargetURL: getEnv("PERMISSION_SERVICE_URL", "http://localhost:8010"),
-			KeepAlive: 30 * time.Second,
-			MaxIdle:   100,
-		},
-		{
-			Name:      "id-service",
-			Prefix:    "/api/v1/id",
-			TargetURL: getEnv("ID_SERVICE_URL", "http://localhost:8011"),
-			KeepAlive: 30 * time.Second,
-			MaxIdle:   100,
-		},
-		{
-			Name:      "file-service",
-			Prefix:    "/api/v1/files",
-			TargetURL: getEnv("FILE_SERVICE_URL", "http://localhost:8012"),
-			KeepAlive: 30 * time.Second,
-			MaxIdle:   100,
-		},
-	}
-
-	for _, backend := range backends {
-		if err := gw.RegisterBackend(backend); err != nil {
-			log.Printf("Warning: failed to register backend %s: %v", backend.Name, err)
-		} else {
-			log.Printf("Registered backend: %s -> %s", backend.Name, backend.TargetURL)
+		serviceName := segments[0]
+		backendURL, ok := backends[serviceName]
+		if !ok {
+			c.JSON(404, gin.H{"error": "service not found: " + serviceName})
+			return
 		}
-	}
+
+		target, _ := url.Parse(backendURL)
+		proxy := httputil.NewSingleHostReverseProxy(target)
+		proxy.ServeHTTP(c.Writer, c.Request)
+	})
+
+	// Game frontend static files
+	gameAssets := envOr("GAME_ASSETS_PATH", "./data/games")
+	r.Static("/game-assets", gameAssets)
+
+	go srv.Start()
+	srv.WaitForShutdown()
 }
 
-func getEnv(key, defaultVal string) string {
-	if val := os.Getenv(key); val != "" {
-		return val
+func envOr(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
 	}
-	return defaultVal
-}
-
-func getEnvInt(key string, defaultVal int) int {
-	if val := os.Getenv(key); val != "" {
-		var intVal int
-		if _, err := fmt.Sscanf(val, "%d", &intVal); err == nil {
-			return intVal
-		}
-	}
-	return defaultVal
+	return fallback
 }

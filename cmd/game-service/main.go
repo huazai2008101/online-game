@@ -1,61 +1,49 @@
-// Game Service - 核心游戏服务
 package main
 
 import (
-	"log"
+	"log/slog"
+	"os"
+	"time"
+
+	"github.com/gin-gonic/gin"
 
 	"online-game/internal/game"
 	"online-game/internal/server"
+	"online-game/pkg/actor"
 	"online-game/pkg/config"
 	"online-game/pkg/db"
+	"online-game/pkg/websocket"
 )
 
 func main() {
-	// Load configuration
 	cfg := config.Load("game-service")
-	cfg.Port = 8002
-	cfg.Database.Database = "game_core_db"
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, nil)))
 
-	// Initialize database
+	slog.Info("starting game-service", "port", cfg.Port)
+
 	database, err := db.New(&cfg.Database)
 	if err != nil {
-		log.Fatalf("Failed to connect to database: %v", err)
+		slog.Error("database error", "error", err)
+		os.Exit(1)
 	}
-	defer database.Close()
+	defer db.Close(database)
 
-	// Auto migrate tables
-	if err := database.AutoMigration(
-		&game.Game{},
-		&game.GameVersion{},
-		&game.GameRoom{},
-		&game.GameSession{},
-	); err != nil {
-		log.Fatalf("Failed to migrate database: %v", err)
-	}
+	actorSystem := actor.NewActorSystem()
+	wsGateway := websocket.NewGateway(websocket.DefaultGatewayConfig())
 
-	// Initialize layers (Repository -> Manager -> Service -> Handler)
-	repo := game.NewRepositoryImpl(database.DB)
-	mgr := game.NewGameInstanceManager(database.DB)
-	defer mgr.Shutdown()
+	gameSvc := game.NewService(database, actorSystem, wsGateway)
+	gameSvc.Migrate()
 
-	service := game.NewService(repo, mgr)
+	gameHandler := game.NewHandler(gameSvc)
 
-	// Create server
-	srv := server.New(cfg)
+	srv := server.New(&server.ServerConfig{Host: cfg.Host, Port: cfg.Port, Env: cfg.Env})
+	gameHandler.RegisterRoutes(srv.Router().Group("/api/v1"))
+	srv.Router().GET("/health", func(c *gin.Context) {
+		c.JSON(200, gin.H{"status": "ok", "service": "game-service", "actors": actorSystem.Count()})
+	})
 
-	// Register routes
-	handler := game.NewHandler(service)
-	srv.RegisterRoutes(handler.RegisterRoutes)
-
-	// Start server in a goroutine
-	go func() {
-		if err := srv.Start(); err != nil {
-			log.Fatalf("Server error: %v", err)
-		}
-	}()
-
-	log.Printf("Game Service started on %s", cfg.GetAddr())
-
-	// Wait for shutdown signal
+	go srv.Start()
 	srv.WaitForShutdown()
+
+	actorSystem.Shutdown(10 * time.Second)
 }

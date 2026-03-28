@@ -3,176 +3,111 @@ package actor
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
-// ActorSystem manages the lifecycle of actors
+// ErrActorNotFound is returned when an actor lookup fails.
+var ErrActorNotFound = fmt.Errorf("actor not found")
+
+// ErrActorExists is returned when registering a duplicate actor.
+var ErrActorExists = fmt.Errorf("actor already exists")
+
+// ActorSystem is the registry and message router for all actors.
+// Uses sync.Map for concurrent-safe actor lookup without global locks.
 type ActorSystem struct {
-	actors    sync.Map // map[string]Actor
-	actorType sync.Map // map[string][]string - actors by type
-	count     atomic.Int64
-	ctx       context.Context
-	cancel    context.CancelFunc
-	wg        sync.WaitGroup
+	actors sync.Map // actorID -> Actor
+	count  atomic.Int64
 }
 
-// NewActorSystem creates a new actor system
+// NewActorSystem creates a new actor system.
 func NewActorSystem() *ActorSystem {
-	ctx, cancel := context.WithCancel(context.Background())
-	return &ActorSystem{
-		ctx:    ctx,
-		cancel: cancel,
-	}
+	return &ActorSystem{}
 }
 
-// Start starts the actor system
-func (s *ActorSystem) Start(ctx context.Context) error {
-	return nil
-}
-
-// Stop stops all actors in the system
-func (s *ActorSystem) Stop() error {
-	s.cancel()
-
-	// Stop all actors
-	s.actors.Range(func(key, value any) bool {
-		actor := value.(Actor)
-		_ = actor.Stop()
-		return true
-	})
-
-	s.wg.Wait()
-	return nil
-}
-
-// Register registers an actor with the system
+// Register adds an actor to the system and starts it.
 func (s *ActorSystem) Register(actor Actor) error {
-	actorID := actor.ID()
-	actorType := actor.Type()
-
-	if _, exists := s.actors.Load(actorID); exists {
-		return fmt.Errorf("actor %s already registered", actorID)
+	id := actor.ID()
+	if _, loaded := s.actors.LoadOrStore(id, actor); loaded {
+		return fmt.Errorf("%w: %s", ErrActorExists, id)
 	}
-
-	s.actors.Store(actorID, actor)
-
-	// Add to type index
-	var actorsOfType []string
-	if v, ok := s.actorType.Load(actorType); ok {
-		actorsOfType = v.([]string)
-	}
-	actorsOfType = append(actorsOfType, actorID)
-	s.actorType.Store(actorType, actorsOfType)
-
 	s.count.Add(1)
+
+	// Start the actor if it's a BaseActor
+	if ba, ok := actor.(*BaseActor); ok {
+		ba.Start()
+	}
+
+	slog.Info("actor registered", "actor_id", id)
 	return nil
 }
 
-// Unregister removes an actor from the system
+// Unregister removes and stops an actor.
 func (s *ActorSystem) Unregister(actorID string) error {
-	actor, err := s.Get(actorID)
-	if err != nil {
-		return err
+	val, loaded := s.actors.LoadAndDelete(actorID)
+	if !loaded {
+		return fmt.Errorf("%w: %s", ErrActorNotFound, actorID)
 	}
-
-	actorType := actor.Type()
-
-	// Remove from main registry
-	s.actors.Delete(actorID)
-
-	// Remove from type index
-	if v, ok := s.actorType.Load(actorType); ok {
-		actorsOfType := v.([]string)
-		newList := make([]string, 0, len(actorsOfType))
-		for _, id := range actorsOfType {
-			if id != actorID {
-				newList = append(newList, id)
-			}
-		}
-		if len(newList) > 0 {
-			s.actorType.Store(actorType, newList)
-		} else {
-			s.actorType.Delete(actorType)
-		}
-	}
-
 	s.count.Add(-1)
+
+	actor := val.(Actor)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := actor.Stop(ctx); err != nil {
+		slog.Warn("actor stop error", "actor_id", actorID, "error", err)
+	}
+
+	slog.Info("actor unregistered", "actor_id", actorID)
 	return nil
 }
 
-// Get retrieves an actor by ID
-func (s *ActorSystem) Get(actorID string) (Actor, error) {
-	v, ok := s.actors.Load(actorID)
+// Get retrieves an actor by ID.
+func (s *ActorSystem) Get(actorID string) (Actor, bool) {
+	val, ok := s.actors.Load(actorID)
 	if !ok {
-		return nil, fmt.Errorf("actor %s not found", actorID)
+		return nil, false
 	}
-	return v.(Actor), nil
+	return val.(Actor), true
 }
 
-// Send sends a message to an actor
-func (s *ActorSystem) Send(actorID string, msg Message) error {
-	actor, err := s.Get(actorID)
-	if err != nil {
-		return err
+// SendTo sends a message to the actor with the given ID.
+func (s *ActorSystem) SendTo(actorID string, msg *Message) error {
+	actor, ok := s.Get(actorID)
+	if !ok {
+		return fmt.Errorf("%w: %s", ErrActorNotFound, actorID)
 	}
 	return actor.Send(msg)
 }
 
-// Broadcast sends a message to all actors of a specific type
-func (s *ActorSystem) Broadcast(actorType string, msg Message) error {
-	v, ok := s.actorType.Load(actorType)
-	if !ok {
-		return fmt.Errorf("no actors of type %s found", actorType)
-	}
-
-	actorsOfType := v.([]string)
-	var lastErr error
-	for _, actorID := range actorsOfType {
-		if err := s.Send(actorID, msg); err != nil {
-			lastErr = err
-		}
-	}
-	return lastErr
-}
-
-// GetByType retrieves all actors of a specific type
-func (s *ActorSystem) GetByType(actorType string) []Actor {
-	v, ok := s.actorType.Load(actorType)
-	if !ok {
-		return nil
-	}
-
-	actorIDs := v.([]string)
-	actors := make([]Actor, 0, len(actorIDs))
-	for _, id := range actorIDs {
-		if actor, err := s.Get(id); err == nil {
-			actors = append(actors, actor)
-		}
-	}
-	return actors
-}
-
-// Count returns the total number of actors in the system
+// Count returns the number of active actors.
 func (s *ActorSystem) Count() int64 {
 	return s.count.Load()
 }
 
-// CountByType returns the number of actors of a specific type
-func (s *ActorSystem) CountByType(actorType string) int {
-	v, ok := s.actorType.Load(actorType)
-	if !ok {
-		return 0
-	}
-	return len(v.([]string))
-}
+// Shutdown gracefully stops all actors in parallel.
+func (s *ActorSystem) Shutdown(timeout time.Duration) {
+	slog.Info("actor system shutting down", "actors", s.count.Load())
 
-// List returns all actor IDs
-func (s *ActorSystem) List() []string {
-	ids := make([]string, 0)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	var wg sync.WaitGroup
 	s.actors.Range(func(key, value any) bool {
-		ids = append(ids, key.(string))
+		wg.Add(1)
+		go func(id string, actor Actor) {
+			defer wg.Done()
+			if err := actor.Stop(ctx); err != nil {
+				slog.Warn("actor shutdown error", "actor_id", id, "error", err)
+			}
+		}(key.(string), value.(Actor))
 		return true
 	})
-	return ids
+	wg.Wait()
+
+	s.actors = sync.Map{}
+	s.count.Store(0)
+	slog.Info("actor system shutdown complete")
 }

@@ -1,0 +1,17 @@
+{
+  "name": "blackjack",
+  "version": "1.0.0",
+  "gameCode": "BLACKJACK",
+  "gameType": "turn-based",
+  "entry": "server/main.js",
+  "clientEntry": "client/index.html",
+  "minPlayers": 1,
+  "maxPlayers": 7,
+  "description": "21点纸牌游戏",
+  "author": "GamePlatform",
+  "config": {
+    "deckCount": 6,
+    "initialChips": 1000,
+    "betLimits": [10, 500]
+  }
+}

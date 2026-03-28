@@ -1,9 +1,8 @@
-// Package db provides database connection and utilities
 package db
 
 import (
 	"fmt"
-	"time"
+	"log/slog"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -12,67 +11,49 @@ import (
 	"online-game/pkg/config"
 )
 
-// DB holds the database connection
-type DB struct {
-	*gorm.DB
-}
+// New creates a new GORM database connection.
+func New(cfg *config.DatabaseConfig) (*gorm.DB, error) {
+	dsn := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
+		cfg.Host, cfg.Port, cfg.User, cfg.Password, cfg.DBName, cfg.SSLMode)
 
-// New creates a new database connection
-func New(cfg *config.DatabaseConfig) (*DB, error) {
-	dsn := cfg.GetDSN()
+	logLevel := logger.Warn
+	if cfg.SSLMode == "" {
+		logLevel = logger.Info
+	}
 
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Info),
-		NowFunc: func() time.Time {
-			return time.Now().UTC()
-		},
+		Logger: logger.Default.LogMode(logLevel),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to database: %w", err)
+		return nil, fmt.Errorf("connect database: %w", err)
 	}
 
 	sqlDB, err := db.DB()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get database instance: %w", err)
+		return nil, fmt.Errorf("get sql.DB: %w", err)
 	}
 
-	// Set connection pool settings
-	sqlDB.SetMaxOpenConns(cfg.MaxOpenConns)
-	sqlDB.SetMaxIdleConns(cfg.MaxIdleConns)
-	sqlDB.SetConnMaxLifetime(cfg.ConnMaxLifetime)
+	sqlDB.SetMaxOpenConns(25)
+	sqlDB.SetMaxIdleConns(10)
 
-	return &DB{DB: db}, nil
+	slog.Info("database connected",
+		"host", cfg.Host,
+		"port", cfg.Port,
+		"dbname", cfg.DBName,
+	)
+	return db, nil
 }
 
-// Close closes the database connection
-func (db *DB) Close() error {
-	sqlDB, err := db.DB.DB()
+// Close closes the database connection.
+func Close(db *gorm.DB) error {
+	sqlDB, err := db.DB()
 	if err != nil {
 		return err
 	}
 	return sqlDB.Close()
 }
 
-// Ping checks if the database connection is alive
-func (db *DB) Ping() error {
-	sqlDB, err := db.DB.DB()
-	if err != nil {
-		return err
-	}
-	return sqlDB.Ping()
-}
-
-// Transaction executes a function within a transaction
-func (db *DB) Transaction(fn func(tx *gorm.DB) error) error {
-	return db.DB.Transaction(fn)
-}
-
-// Model returns a GORM model for the given value
-func (db *DB) Model(value interface{}) *gorm.DB {
-	return db.DB.Model(value)
-}
-
-// AutoMigration runs auto migration for given models
-func (db *DB) AutoMigration(models ...interface{}) error {
-	return db.DB.AutoMigrate(models...)
+// AutoMigration runs auto migration for the given models.
+func AutoMigration(db *gorm.DB, models ...any) error {
+	return db.AutoMigrate(models...)
 }

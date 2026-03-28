@@ -1,0 +1,16 @@
+{
+  "name": "@gameplatform/client-sdk",
+  "version": "0.1.0",
+  "description": "Client SDK for the game platform - provides WebSocket connection and game lifecycle for browser games",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.0"
+  },
+  "license": "MIT"
+}

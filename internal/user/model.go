@@ -6,72 +6,56 @@ import (
 	"gorm.io/gorm"
 )
 
-// User represents a user account
+// User represents a registered user.
 type User struct {
-	ID        uint      `gorm:"primaryKey" json:"id"`
-	Username  string    `gorm:"uniqueIndex;size:50" json:"username"`
-	Password  string    `gorm:"size:255" json:"-"`
-	Email     string    `gorm:"uniqueIndex;size:100" json:"email"`
-	Phone     string    `gorm:"uniqueIndex;size:20" json:"phone"`
-	Nickname  string    `gorm:"size:50" json:"nickname"`
-	Avatar    string    `gorm:"size:255" json:"avatar"`
-	Status    int       `gorm:"default:1" json:"status"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID        uint           `gorm:"primaryKey" json:"id"`
+	Username  string         `gorm:"uniqueIndex;size:50;not null" json:"username"`
+	Password  string         `gorm:"size:255;not null" json:"-"`
+	Nickname  string         `gorm:"size:50" json:"nickname"`
+	Email     string         `gorm:"uniqueIndex;size:100" json:"email"`
+	Avatar    string         `gorm:"size:255" json:"avatar,omitempty"`
+	Status    int            `gorm:"default:1" json:"status"` // 0=banned 1=normal 2=admin
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
-// UserProfile represents extended user profile information
-type UserProfile struct {
-	ID        uint      `gorm:"primaryKey" json:"id"`
-	UserID    uint      `gorm:"uniqueIndex" json:"user_id"`
-	Gender    string    `gorm:"size:10" json:"gender"`
-	Birthday *time.Time `json:"birthday"`
-	Location string    `gorm:"size:100" json:"location"`
-	Bio      string    `gorm:"type:text" json:"bio"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-}
-
-// Friend represents a friendship between users
-type Friend struct {
-	ID         uint      `gorm:"primaryKey" json:"id"`
-	UserID     uint      `gorm:"index" json:"user_id"`
-	FriendID   uint      `gorm:"index" json:"friend_id"`
-	Status     string    `gorm:"size:20;default:pending" json:"status"` // pending, accepted, blocked
-	Remark     string    `gorm:"size:50" json:"remark"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
-}
-
-// UserSession represents a user session
+// UserSession tracks login sessions.
 type UserSession struct {
 	ID           uint      `gorm:"primaryKey" json:"id"`
-	UserID       uint      `gorm:"index" json:"user_id"`
-	Token        string    `gorm:"uniqueIndex;size:255" json:"token"`
-	RefreshToken string   `gorm:"size:255" json:"refresh_token"`
-	IPAddress   string    `gorm:"size:50" json:"ip_address"`
-	UserAgent   string    `gorm:"size:255" json:"user_agent"`
-	ExpiresAt   time.Time `json:"expires_at"`
-	CreatedAt   time.Time `json:"created_at"`
+	UserID       uint      `gorm:"index;not null" json:"user_id"`
+	Token        string    `gorm:"size:500;not null" json:"-"`
+	RefreshToken string    `gorm:"size:500" json:"-"`
+	ExpiresAt    time.Time `json:"expires_at"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
-// TableName specifies the table name for User
-func (User) TableName() string {
-	return "users"
+// LoginRequest is the login input.
+type LoginRequest struct {
+	Username string `json:"username" binding:"required"`
+	Password string `json:"password" binding:"required,min=6"`
 }
 
-// TableName specifies the table name for UserProfile
-func (UserProfile) TableName() string {
-	return "user_profiles"
+// RegisterRequest is the registration input.
+type RegisterRequest struct {
+	Username string `json:"username" binding:"required,min=3,max=50"`
+	Password string `json:"password" binding:"required,min=6"`
+	Email    string `json:"email" binding:"required,email"`
+	Nickname string `json:"nickname" binding:"max=50"`
 }
 
-// TableName specifies the table name for Friend
-func (Friend) TableName() string {
-	return "friends"
+// LoginResponse is returned after successful login.
+type LoginResponse struct {
+	Token     string    `json:"token"`
+	ExpiresAt time.Time `json:"expires_at"`
+	User      *User     `json:"user"`
 }
 
-// TableName specifies the table name for UserSession
-func (UserSession) TableName() string {
-	return "user_sessions"
+// UserInfo is the public user profile.
+type UserInfo struct {
+	ID       uint   `json:"id"`
+	Username string `json:"username"`
+	Nickname string `json:"nickname"`
+	Avatar   string `json:"avatar"`
+	Status   int    `json:"status"`
 }

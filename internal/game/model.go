@@ -6,79 +6,92 @@ import (
 	"gorm.io/gorm"
 )
 
-// Game represents a game
+// Game represents a game registered on the platform.
 type Game struct {
-	ID          uint   `gorm:"primaryKey" json:"id"`
-	OrgID       int64  `json:"org_id"`
-	GameCode    string `gorm:"uniqueIndex;size:50" json:"game_code"`
-	GameName    string `gorm:"size:100" json:"game_name"`
-	GameType    string `gorm:"size:20" json:"game_type"`
-	GameIcon    string `gorm:"size:255" json:"game_icon,omitempty"`
-	GameCover   string `gorm:"size:255" json:"game_cover,omitempty"`
-	GameConfig  string `gorm:"type:text" json:"game_config,omitempty"` // JSON string
-	Status      int    `gorm:"default:1" json:"status"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID          uint           `gorm:"primaryKey" json:"id"`
+	GameCode    string         `gorm:"uniqueIndex;size:50;not null" json:"game_code"`
+	GameName    string         `gorm:"size:100;not null" json:"game_name"`
+	GameType    string         `gorm:"size:20;default:turn-based" json:"game_type"` // realtime, turn-based
+	Description string         `gorm:"type:text" json:"description,omitempty"`
+	GameIcon    string         `gorm:"size:255" json:"game_icon,omitempty"`
+	GameCover   string         `gorm:"size:255" json:"game_cover,omitempty"`
+	MinPlayers  int            `gorm:"default:2" json:"min_players"`
+	MaxPlayers  int            `gorm:"default:10" json:"max_players"`
+	Status      string         `gorm:"size:20;default:draft;not null" json:"status"` // draft, published, offline
+	Config      string         `gorm:"type:text" json:"config,omitempty"`             // JSON config
+	CreatedAt   time.Time      `json:"created_at"`
+	UpdatedAt   time.Time      `json:"updated_at"`
 	DeletedAt   gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
-// GameVersion represents a version of a game
+// GameVersion tracks uploaded game packages.
 type GameVersion struct {
-	ID          uint   `gorm:"primaryKey" json:"id"`
-	GameID      uint   `json:"game_id"`
-	Version     string `gorm:"size:20" json:"version"`
-	ScriptType  string `gorm:"size:20" json:"script_type"` // js or wasm
-	ScriptPath  string `gorm:"size:255" json:"script_path"`
-	ScriptHash  string `gorm:"size:64" json:"script_hash"`
-	Description string `gorm:"type:text" json:"description,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
-	CreatedBy   int64  `json:"created_by"`
-}
-
-// GameRoom represents a game room
-type GameRoom struct {
 	ID          uint      `gorm:"primaryKey" json:"id"`
-	RoomID      string    `gorm:"uniqueIndex;size:50" json:"room_id"`
-	GameID      uint      `json:"game_id"`
-	RoomName    string    `gorm:"size:100" json:"room_name"`
-	MaxPlayers  int       `json:"max_players"`
-	PlayerCount int       `gorm:"default:0" json:"player_count"`
-	Status      string    `gorm:"size:20;default:waiting" json:"status"` // waiting, playing, closed
-	Config      string    `gorm:"type:text" json:"config,omitempty"` // JSON string
+	GameID      uint      `gorm:"index;not null" json:"game_id"`
+	Version     string    `gorm:"size:20;not null" json:"version"`
+	ScriptType  string    `gorm:"size:10;default:js" json:"script_type"`
+	PackagePath string    `gorm:"size:500" json:"package_path"`
+	PackageHash string    `gorm:"size:64" json:"package_hash"`
+	PackageSize int64     `json:"package_size"`
+	EntryScript string    `gorm:"size:255" json:"entry_script"`
+	Status      string    `gorm:"size:20;default:active" json:"status"` // active, deprecated
 	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
-	ClosedAt    *time.Time `json:"closed_at,omitempty"`
+	CreatedBy   uint      `json:"created_by"`
 }
 
-// GameSession represents a game session
+// GameRoom represents a game room.
+type GameRoom struct {
+	ID          uint           `gorm:"primaryKey" json:"id"`
+	RoomID      string         `gorm:"uniqueIndex;size:36;not null" json:"room_id"`
+	GameID      uint           `gorm:"index;not null" json:"game_id"`
+	GameVersion string         `gorm:"size:20" json:"game_version,omitempty"`
+	RoomName    string         `gorm:"size:100" json:"room_name"`
+	OwnerID     string         `gorm:"size:36" json:"owner_id"`
+	MaxPlayers  int            `gorm:"default:4" json:"max_players"`
+	Status      string         `gorm:"size:20;default:waiting;not null" json:"status"` // waiting, playing, closed
+	Config      string         `gorm:"type:text" json:"config,omitempty"`
+	CreatedAt   time.Time      `json:"created_at"`
+	UpdatedAt   time.Time      `json:"updated_at"`
+	ClosedAt    *time.Time     `json:"closed_at,omitempty"`
+	DeletedAt   gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+// GameSession records a completed game.
 type GameSession struct {
-	ID            uint      `gorm:"primaryKey" json:"id"`
-	RoomID        string    `gorm:"size:50;index" json:"room_id"`
-	GameID        uint      `json:"game_id"`
-	StartTime     time.Time `json:"start_time"`
-	EndTime       *time.Time `json:"end_time,omitempty"`
-	Duration      int       `json:"duration"` // seconds
-	Status        string    `gorm:"size:20" json:"status"` // running, completed, cancelled
-	FinalState    string    `gorm:"type:text" json:"final_state,omitempty"` // JSON string
-	CreatedAt     time.Time `json:"created_at"`
+	ID         uint      `gorm:"primaryKey" json:"id"`
+	RoomID     string    `gorm:"index;size:36;not null" json:"room_id"`
+	GameID     uint      `gorm:"index;not null" json:"game_id"`
+	Status     string    `gorm:"size:20;default:running" json:"status"` // running, completed, cancelled
+	StartTime  time.Time `json:"start_time"`
+	EndTime    *time.Time `json:"end_time,omitempty"`
+	Duration   int       `json:"duration"` // seconds
+	FinalState string    `gorm:"type:text" json:"final_state,omitempty"` // JSON
+	Results    string    `gorm:"type:text" json:"results,omitempty"`     // JSON
 }
 
-// TableName specifies the table name for Game
-func (Game) TableName() string {
-	return "games"
+// RoomPlayer tracks players in a room.
+type RoomPlayer struct {
+	ID       uint       `gorm:"primaryKey" json:"id"`
+	RoomID   string     `gorm:"index;size:36;not null" json:"room_id"`
+	PlayerID string     `gorm:"index;size:36;not null" json:"player_id"`
+	Nickname string     `gorm:"size:50" json:"nickname"`
+	SeatIdx  int        `json:"seat_index"`
+	Status   string     `gorm:"size:20;default:waiting" json:"status"` // waiting, ready, playing, left
+	Score    int        `gorm:"default:0" json:"score"`
+	JoinedAt time.Time  `json:"joined_at"`
+	LeftAt   *time.Time `json:"left_at,omitempty"`
 }
 
-// TableName specifies the table name for GameVersion
-func (GameVersion) TableName() string {
-	return "game_versions"
+// CreateRoomRequest is the input for creating a room.
+type CreateRoomRequest struct {
+	GameID     uint   `json:"game_id" binding:"required"`
+	RoomName   string `json:"room_name" binding:"max=100"`
+	MaxPlayers int    `json:"max_players" binding:"omitempty,min=2,max=100"`
 }
 
-// TableName specifies the table name for GameRoom
-func (GameRoom) TableName() string {
-	return "game_rooms"
-}
-
-// TableName specifies the table name for GameSession
-func (GameSession) TableName() string {
-	return "game_sessions"
+// GameListQuery is the query for listing games.
+type GameListQuery struct {
+	GameType string `form:"game_type"`
+	Status   string `form:"status"`
+	Search   string `form:"search"`
 }
