@@ -30,6 +30,7 @@ services:
         SERVICE: user-service
     ports:
       - "8001:8001"
+      - "9001:9001"
     env_file:
       - ../deploy/config/user-service.env
     depends_on:
@@ -44,6 +45,7 @@ services:
         SERVICE: game-service
     ports:
       - "8002:8002"
+      - "9002:9002"
     env_file:
       - ../deploy/config/game-service.env
     volumes:
@@ -67,6 +69,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      user-service:
+        condition: service_started
 
   api-gateway:
     build:

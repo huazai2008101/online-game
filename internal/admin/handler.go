@@ -20,8 +20,8 @@ import (
 
 // Service handles admin operations: game CRUD, package upload, publish.
 type Service struct {
-	db        *gorm.DB
-	gameSvc   GameServiceClient
+	db          *gorm.DB
+	gameSvc     GameServiceClient
 	storagePath string
 }
 

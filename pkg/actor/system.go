@@ -9,6 +9,12 @@ import (
 	"time"
 )
 
+// Startable is an optional interface for actors that need explicit Start().
+// Both *BaseActor and *GameActor satisfy this via BaseActor.Start().
+type Startable interface {
+	Start()
+}
+
 // ErrActorNotFound is returned when an actor lookup fails.
 var ErrActorNotFound = fmt.Errorf("actor not found")
 
@@ -35,9 +41,9 @@ func (s *ActorSystem) Register(actor Actor) error {
 	}
 	s.count.Add(1)
 
-	// Start the actor if it's a BaseActor
-	if ba, ok := actor.(*BaseActor); ok {
-		ba.Start()
+	// Start the actor if it implements Startable (*BaseActor and *GameActor both do)
+	if startable, ok := actor.(Startable); ok {
+		startable.Start()
 	}
 
 	slog.Info("actor registered", "actor_id", id)

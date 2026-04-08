@@ -19,6 +19,7 @@ type GojaEngine struct {
 	config   *EngineConfig
 	hub      HubAdapter
 	roomMgr  RoomAdapter
+	sandbox  SandboxConfig
 
 	// Timer management (accessed only from actor goroutine)
 	timers  map[int]*time.Timer
@@ -29,8 +30,9 @@ type GojaEngine struct {
 	startTime time.Time
 	stats     EngineStats
 
-	// Callbacks for game events
-	onGameEnd func(roomID string, results any)
+	// Callbacks
+	onGameEnd       func(roomID string, results any)
+	onTimerCallback func(timerID int) // called from time.AfterFunc to route back to actor inbox
 
 	mu sync.Mutex // only used for external GetState() calls
 }
@@ -65,12 +67,23 @@ func (e *GojaEngine) Init(ctx context.Context, config *EngineConfig) error {
 	e.vm = goja.New()
 	e.startTime = time.Now()
 
-	// Configure runtime limits
-	if config.MaxMemory > 0 {
-		e.vm.SetMaxCallStackSize(100)
-		// goja doesn't have a direct memory limit API,
-		// but we can limit via field name to prevent runaway scripts
+	// Apply sandbox config (use defaults if zero-valued)
+	e.sandbox = config.Sandbox
+	if e.sandbox.ExecutionTimeoutMs == 0 && e.sandbox.MaxCallStackSize == 0 {
+		e.sandbox = DefaultSandboxConfig()
+		config.Sandbox = e.sandbox
 	}
+
+	// Apply call stack limit
+	if e.sandbox.MaxCallStackSize > 0 {
+		e.vm.SetMaxCallStackSize(e.sandbox.MaxCallStackSize)
+	}
+
+	// Disable eval for security
+	vm := e.vm
+	vm.Set("eval", func(call goja.FunctionCall) goja.Value {
+		panic(vm.NewGoError(fmt.Errorf("eval is disabled in sandbox")))
+	})
 
 	// Inject all host APIs before loading game script
 	e.injectHostAPI()
@@ -78,6 +91,8 @@ func (e *GojaEngine) Init(ctx context.Context, config *EngineConfig) error {
 	slog.Info("goja engine initialized",
 		"game_id", config.GameID,
 		"room_id", config.RoomID,
+		"timeout_ms", e.sandbox.ExecutionTimeoutMs,
+		"max_timers", e.sandbox.MaxActiveTimers,
 	)
 	return nil
 }
@@ -86,6 +101,12 @@ func (e *GojaEngine) Init(ctx context.Context, config *EngineConfig) error {
 func (e *GojaEngine) LoadScript(scriptContent string) error {
 	if e.vm == nil {
 		return fmt.Errorf("engine not initialized")
+	}
+
+	// Enforce script size limit
+	if e.sandbox.MaxScriptSize > 0 && int64(len(scriptContent)) > e.sandbox.MaxScriptSize {
+		return fmt.Errorf("script exceeds max size (%d > %d bytes)",
+			len(scriptContent), e.sandbox.MaxScriptSize)
 	}
 
 	// Load the SDK runtime first (provides GameServer base class)
@@ -107,6 +128,7 @@ func (e *GojaEngine) LoadScript(scriptContent string) error {
 }
 
 // TriggerHook invokes a named hook function in the JS game script.
+// Enforces execution timeout via vm.Interrupt().
 func (e *GojaEngine) TriggerHook(hookName string, args ...any) (any, error) {
 	if e.vm == nil {
 		return nil, fmt.Errorf("engine not initialized")
@@ -131,8 +153,21 @@ func (e *GojaEngine) TriggerHook(hookName string, args ...any) (any, error) {
 
 	fn, ok := goja.AssertFunction(e.vm.Get(hookName))
 	if !ok {
-		// Hook not defined by game developer — that's OK, it's optional
-		return nil, nil
+		return nil, nil // hook not defined, optional
+	}
+
+	// Setup execution timeout
+	var timeoutTimer *time.Timer
+	timeoutMs := e.sandbox.ExecutionTimeoutMs
+	if timeoutMs > 0 {
+		timeoutTimer = time.AfterFunc(time.Duration(timeoutMs)*time.Millisecond, func() {
+			e.vm.Interrupt("execution timeout exceeded")
+		})
+		defer func() {
+			if timeoutTimer != nil {
+				timeoutTimer.Stop()
+			}
+		}()
 	}
 
 	goArgs := make([]goja.Value, len(args))
@@ -143,6 +178,11 @@ func (e *GojaEngine) TriggerHook(hookName string, args ...any) (any, error) {
 	result, err := fn(nil, goArgs...)
 	if err != nil {
 		e.stats.ErrorCount++
+		// Distinguish timeout from other errors
+		if timeoutTimer != nil && !timeoutTimer.Stop() {
+			// Timer already fired — this was a timeout
+			return nil, fmt.Errorf("hook %s timed out after %dms", hookName, timeoutMs)
+		}
 		return nil, fmt.Errorf("hook %s execution error: %w", hookName, err)
 	}
 
@@ -241,33 +281,33 @@ func (e *GojaEngine) injectHostAPI() {
 	// ---- Timers ----
 
 	vm.Set("__platform_setTimeout", func(call goja.FunctionCall) goja.Value {
-		fn := call.Argument(0)
+		if e.sandbox.MaxActiveTimers > 0 && len(e.timers) >= e.sandbox.MaxActiveTimers {
+			slog.Warn("timer limit reached", "room_id", roomID, "count", len(e.timers))
+			return goja.Undefined()
+		}
 		ms := call.Argument(1).ToInteger()
 		id := int(e.timerID.Add(1))
 		e.timers[id] = time.AfterFunc(time.Duration(ms)*time.Millisecond, func() {
-			// Timer callbacks are NOT dispatched back to actor inbox in this simplified version.
-			// In production, this should send a MsgTimer to the GameActor's inbox.
-			if vm := e.vm; vm != nil {
-				if fnVal, ok := goja.AssertFunction(fn); ok {
-					fnVal(nil)
-				}
+			if e.onTimerCallback != nil {
+				e.onTimerCallback(id)
 			}
 		})
 		return vm.ToValue(id)
 	})
 
 	vm.Set("__platform_setInterval", func(call goja.FunctionCall) goja.Value {
-		fn := call.Argument(0)
+		if e.sandbox.MaxActiveTimers > 0 && len(e.timers) >= e.sandbox.MaxActiveTimers {
+			slog.Warn("timer limit reached", "room_id", roomID, "count", len(e.timers))
+			return goja.Undefined()
+		}
 		ms := call.Argument(1).ToInteger()
 		id := int(e.timerID.Add(1))
 		ticker := time.NewTicker(time.Duration(ms) * time.Millisecond)
 		e.timers[id] = &time.Timer{} // placeholder for cleanup tracking
 		go func() {
 			for range ticker.C {
-				if vm := e.vm; vm != nil {
-					if fnVal, ok := goja.AssertFunction(fn); ok {
-						fnVal(nil)
-					}
+				if e.onTimerCallback != nil {
+					e.onTimerCallback(id)
 				} else {
 					ticker.Stop()
 					return
@@ -513,4 +553,11 @@ func (e *GojaEngine) safeExport(v goja.Value) any {
 // SetOnGameEnd sets the callback for game end events.
 func (e *GojaEngine) SetOnGameEnd(fn func(roomID string, results any)) {
 	e.onGameEnd = fn
+}
+
+// SetTimerCallback sets the callback invoked when a JS timer fires.
+// The callback should route the timerID back to the owning actor's inbox
+// to maintain the single-goroutine execution contract.
+func (e *GojaEngine) SetTimerCallback(fn func(timerID int)) {
+	e.onTimerCallback = fn
 }

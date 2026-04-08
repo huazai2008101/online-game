@@ -1,22 +1,25 @@
 package game
 
 import (
+	"fmt"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
 
 	"online-game/pkg/api"
 	"online-game/pkg/apperror"
+	"online-game/pkg/auth"
 )
 
 // Handler handles HTTP requests for game service.
 type Handler struct {
-	service *Service
+	service    *Service
+	jwtManager *auth.JWTManager
 }
 
 // NewHandler creates a new game handler.
-func NewHandler(service *Service) *Handler {
-	return &Handler{service: service}
+func NewHandler(service *Service, jwtManager *auth.JWTManager) *Handler {
+	return &Handler{service: service, jwtManager: jwtManager}
 }
 
 // RegisterRoutes registers game routes.
@@ -187,4 +190,32 @@ func (h *Handler) PlayerAction(c *gin.Context) {
 		return
 	}
 	api.Success(c, nil)
+}
+
+// HandleWebSocket handles GET /ws?token=xxx&gameId=xxx&roomId=xxx
+// Authenticates via JWT query param, then upgrades to WebSocket.
+func (h *Handler) HandleWebSocket(c *gin.Context) {
+	// 1. Validate token from query param
+	token := c.Query("token")
+	if token == "" {
+		c.JSON(401, gin.H{"error": "missing token"})
+		return
+	}
+	claims, err := h.jwtManager.ValidateToken(token)
+	if err != nil {
+		c.JSON(401, gin.H{"error": "invalid token"})
+		return
+	}
+	playerID := fmt.Sprintf("%d", claims.UserID)
+
+	// 2. Extract room info
+	gameID := c.Query("gameId")
+	roomID := c.Query("roomId")
+	if gameID == "" || roomID == "" {
+		c.JSON(400, gin.H{"error": "missing gameId or roomId"})
+		return
+	}
+
+	// 3. Delegate to service for upgrade + routing
+	h.service.HandleWebSocket(c.Writer, c.Request, playerID, gameID, roomID)
 }

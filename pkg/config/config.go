@@ -1,6 +1,9 @@
 package config
 
-import "os"
+import (
+	"os"
+	"strconv"
+)
 
 // Config holds all configuration for a service.
 type Config struct {
@@ -13,6 +16,9 @@ type Config struct {
 	Database DatabaseConfig
 	Redis    RedisConfig
 	LogLevel string
+
+	JWTSecret      string
+	JWTExpiryHours int
 }
 
 // DatabaseConfig holds PostgreSQL connection settings.
@@ -42,6 +48,8 @@ func Load(serviceName string) *Config {
 		Port:        envOr("PORT", defaultPort(serviceName)),
 		GRPCPort:    envOr("GRPC_PORT", defaultGRPCPort(serviceName)),
 		LogLevel:    envOr("LOG_LEVEL", "info"),
+		JWTSecret:      envOr("JWT_SECRET", "change-me-in-production"),
+		JWTExpiryHours: envOrInt("JWT_EXPIRY_HOURS", 72),
 		Database: DatabaseConfig{
 			Host:     envOr("DB_HOST", "localhost"),
 			Port:     envOr("DB_PORT", "5432"),
@@ -82,6 +90,15 @@ func (c *Config) RedisAddr() string {
 func envOr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return fallback
+}
+
+func envOrInt(key string, fallback int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
 	}
 	return fallback
 }

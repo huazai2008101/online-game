@@ -3,10 +3,12 @@ package websocket
 import (
 	"encoding/json"
 	"log/slog"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
 
@@ -219,6 +221,64 @@ func (g *Gateway) GetConn(connID string) (*Conn, bool) {
 // Stats returns gateway statistics.
 func (g *Gateway) Stats() (conns, messages int64) {
 	return g.connCount.Load(), g.msgCount.Load()
+}
+
+// Count returns the current connection count.
+func (g *Gateway) Count() int64 {
+	return g.connCount.Load()
+}
+
+// upgrader handles HTTP -> WebSocket upgrade.
+var upgrader = websocket.Upgrader{
+	ReadBufferSize:  1024,
+	WriteBufferSize: 1024,
+	CheckOrigin:     func(r *http.Request) bool { return true },
+}
+
+// ServeWS upgrades an HTTP request to WebSocket, registers the connection,
+// and starts read/write pumps. The onMessage callback receives incoming messages.
+func (g *Gateway) ServeWS(w http.ResponseWriter, r *http.Request,
+	playerID, roomID string,
+	onMessage func(conn *Conn, msg *WsMessage)) {
+
+	ws, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		slog.Error("ws upgrade failed", "error", err)
+		return
+	}
+
+	connID := uuid.New().String()
+	conn := NewConn(connID, playerID, roomID, ws, g)
+	g.Register(conn)
+
+	// Send initial connected message
+	welcome := WsMessage{
+		Type: TypeConnect,
+		Data: map[string]any{
+			"playerId": playerID,
+			"roomId":   roomID,
+		},
+		Ts: time.Now().UnixMilli(),
+	}
+	payload, _ := json.Marshal(welcome)
+	conn.sendJSON(payload)
+
+	// Start pumps
+	go conn.WritePump()
+	go conn.ReadPump(
+		func(msg *WsMessage) {
+			onMessage(conn, msg)
+		},
+		func() {
+			slog.Debug("ws disconnected", "conn_id", connID, "player_id", playerID)
+		},
+	)
+
+	slog.Info("ws connection established",
+		"conn_id", connID,
+		"player_id", playerID,
+		"room_id", roomID,
+	)
 }
 
 // --- internal helpers ---

@@ -18,6 +18,7 @@ type Game struct {
 	MinPlayers  int            `gorm:"default:2" json:"min_players"`
 	MaxPlayers  int            `gorm:"default:10" json:"max_players"`
 	Status      string         `gorm:"size:20;default:draft;not null" json:"status"` // draft, published, offline
+	SortOrder   int            `gorm:"default:0" json:"sort_order"`
 	Config      string         `gorm:"type:text" json:"config,omitempty"`             // JSON config
 	CreatedAt   time.Time      `json:"created_at"`
 	UpdatedAt   time.Time      `json:"updated_at"`

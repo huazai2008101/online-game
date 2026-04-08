@@ -26,14 +26,15 @@ type GameEngine interface {
 
 // EngineConfig holds configuration for initializing an engine instance.
 type EngineConfig struct {
-	GameID    string
-	RoomID    string
-	GameCode  string
-	Version   string
+	GameID     string
+	RoomID     string
+	GameCode   string
+	Version    string
 	ScriptPath string
-	MaxMemory int64  // memory limit in bytes (0 = unlimited)
-	Timeout   int64  // execution timeout in milliseconds (0 = no timeout)
-	Env       map[string]any
+	MaxMemory  int64        // deprecated: use Sandbox fields
+	Timeout    int64        // deprecated: use Sandbox.ExecutionTimeoutMs
+	Env        map[string]any
+	Sandbox    SandboxConfig // resource limits for the JS sandbox
 }
 
 // EngineStats holds runtime statistics.

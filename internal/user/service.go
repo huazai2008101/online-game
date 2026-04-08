@@ -1,9 +1,13 @@
 package user
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
+	goredis "github.com/redis/go-redis/v9"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 
@@ -15,11 +19,17 @@ import (
 type Service struct {
 	db         *gorm.DB
 	jwtManager *auth.JWTManager
+	cache      *goredis.Client // optional: nil = no caching
 }
 
 // NewService creates a new user service.
 func NewService(db *gorm.DB, jwtManager *auth.JWTManager) *Service {
 	return &Service{db: db, jwtManager: jwtManager}
+}
+
+// SetCache sets the Redis cache client.
+func (s *Service) SetCache(cache *goredis.Client) {
+	s.cache = cache
 }
 
 // Register creates a new user account.
@@ -107,12 +117,32 @@ func (s *Service) Login(req *LoginRequest) (*LoginResponse, error) {
 
 // GetUser retrieves a user by ID.
 func (s *Service) GetUser(id uint) (*User, error) {
+	// Try cache
+	ctx := context.Background()
+	cacheKey := fmt.Sprintf("user:%d", id)
+	if s.cache != nil {
+		cached, err := s.cache.Get(ctx, cacheKey).Result()
+		if err == nil {
+			var user User
+			if json.Unmarshal([]byte(cached), &user) == nil {
+				return &user, nil
+			}
+		}
+	}
+
 	var user User
 	if err := s.db.First(&user, id).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, apperror.ErrUserNotFound
 		}
 		return nil, apperror.ErrDatabaseError.WithData(err.Error())
+	}
+
+	// Cache for 30 minutes
+	if s.cache != nil {
+		if data, err := json.Marshal(&user); err == nil {
+			s.cache.Set(ctx, cacheKey, data, 30*time.Minute)
+		}
 	}
 	return &user, nil
 }

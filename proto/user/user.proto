@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package user;
+
+option go_package = "online-game/proto/user";
+
+service UserService {
+  // ValidateToken validates a JWT token and returns user claims.
+  rpc ValidateToken(ValidateTokenRequest) returns (ValidateTokenResponse);
+  // GetUser retrieves public user info by ID.
+  rpc GetUser(GetUserRequest) returns (UserResponse);
+}
+
+message ValidateTokenRequest {
+  string token = 1;
+}
+
+message ValidateTokenResponse {
+  bool valid = 1;
+  int64 user_id = 2;
+  string username = 3;
+  string role = 4;
+}
+
+message GetUserRequest {
+  int64 user_id = 1;
+}
+
+message UserResponse {
+  int64 id = 1;
+  string username = 2;
+  string nickname = 3;
+  string avatar = 4;
+  int32 status = 5;
+}

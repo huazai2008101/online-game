@@ -2,11 +2,14 @@ package game
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"time"
 
 	"github.com/google/uuid"
+	goredis "github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 
 	"online-game/pkg/actor"
@@ -20,15 +23,27 @@ type Service struct {
 	db          *gorm.DB
 	actorSystem *actor.ActorSystem
 	wsGateway   *websocket.Gateway
+	cache       *goredis.Client // optional: nil = no caching
 }
 
 // NewService creates a new game service.
-func NewService(db *gorm.DB, actorSystem *actor.ActorSystem, wsGateway *websocket.Gateway) *Service {
+func NewService(db *gorm.DB, actorSystem *actor.ActorSystem, wsGateway *websocket.Gateway, cache *goredis.Client) *Service {
 	return &Service{
 		db:          db,
 		actorSystem: actorSystem,
 		wsGateway:   wsGateway,
+		cache:       cache,
 	}
+}
+
+// DB returns the underlying database connection.
+func (s *Service) DB() *gorm.DB {
+	return s.db
+}
+
+// SetCache sets the Redis cache client.
+func (s *Service) SetCache(cache *goredis.Client) {
+	s.cache = cache
 }
 
 // --- Game Management ---
@@ -61,6 +76,19 @@ func (s *Service) ListGames(query *GameListQuery, page, pageSize int) ([]Game, i
 
 // GetGame retrieves a game by ID.
 func (s *Service) GetGame(id uint) (*Game, error) {
+	// Try cache first
+	ctx := context.Background()
+	cacheKey := fmt.Sprintf("game:%d", id)
+	if s.cache != nil {
+		cached, err := s.cache.Get(ctx, cacheKey).Result()
+		if err == nil {
+			var game Game
+			if json.Unmarshal([]byte(cached), &game) == nil {
+				return &game, nil
+			}
+		}
+	}
+
 	var game Game
 	if err := s.db.First(&game, id).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
@@ -68,11 +96,30 @@ func (s *Service) GetGame(id uint) (*Game, error) {
 		}
 		return nil, apperror.ErrDatabaseError.WithData(err.Error())
 	}
+
+	// Cache for 1 hour
+	if s.cache != nil {
+		if data, err := json.Marshal(&game); err == nil {
+			s.cache.Set(ctx, cacheKey, data, time.Hour)
+		}
+	}
 	return &game, nil
 }
 
 // GetLatestVersion returns the latest active version of a game.
 func (s *Service) GetLatestVersion(gameID uint) (*GameVersion, error) {
+	ctx := context.Background()
+	cacheKey := fmt.Sprintf("game_version:%d", gameID)
+	if s.cache != nil {
+		cached, err := s.cache.Get(ctx, cacheKey).Result()
+		if err == nil {
+			var version GameVersion
+			if json.Unmarshal([]byte(cached), &version) == nil {
+				return &version, nil
+			}
+		}
+	}
+
 	var version GameVersion
 	if err := s.db.Where("game_id = ? AND status = 'active'", gameID).
 		Order("created_at DESC").First(&version).Error; err != nil {
@@ -80,6 +127,12 @@ func (s *Service) GetLatestVersion(gameID uint) (*GameVersion, error) {
 			return nil, apperror.ErrNotFound.WithMessage("没有可用版本")
 		}
 		return nil, apperror.ErrDatabaseError.WithData(err.Error())
+	}
+
+	if s.cache != nil {
+		if data, err := json.Marshal(&version); err == nil {
+			s.cache.Set(ctx, cacheKey, data, 30*time.Minute)
+		}
 	}
 	return &version, nil
 }
@@ -123,6 +176,9 @@ func (s *Service) CreateRoom(ctx context.Context, playerID, nickname string, req
 		slog.Error("failed to create game actor", "room_id", roomID, "error", err)
 		// Room is created but actor failed — room will be cleaned up
 	}
+
+	// Invalidate room caches
+	s.invalidateRoomCache(fmt.Sprintf("%d", req.GameID))
 
 	// Auto-join creator
 	joinMsg := actor.NewMessage(actor.MsgPlayerJoin, playerID, &actor.PlayerJoinData{
@@ -275,7 +331,77 @@ func (s *Service) Migrate() error {
 	)
 }
 
-// --- Internal ---
+// --- Cache helpers ---
+
+func (s *Service) invalidateRoomCache(gameID string) {
+	if s.cache == nil {
+		return
+	}
+	ctx := context.Background()
+	pattern := fmt.Sprintf("rooms:%s:*", gameID)
+	iter := s.cache.Scan(ctx, 0, pattern, 100).Iterator()
+	for iter.Next(ctx) {
+		s.cache.Del(ctx, iter.Val())
+	}
+}
+
+func (s *Service) invalidateGameCache(gameID uint) {
+	if s.cache == nil {
+		return
+	}
+	ctx := context.Background()
+	s.cache.Del(ctx, fmt.Sprintf("game:%d", gameID))
+	s.cache.Del(ctx, fmt.Sprintf("game_version:%d", gameID))
+}
+
+// HandleWebSocket upgrades HTTP to WebSocket and routes messages to the actor.
+func (s *Service) HandleWebSocket(w http.ResponseWriter, r *http.Request,
+	playerID, gameID, roomID string) {
+
+	actorID := fmt.Sprintf("game:%s:%s", gameID, roomID)
+
+	// Verify actor exists
+	if _, ok := s.actorSystem.Get(actorID); !ok {
+		http.Error(w, "room not found", http.StatusNotFound)
+		return
+	}
+
+	// Upgrade and register connection
+	s.wsGateway.ServeWS(w, r, playerID, roomID,
+		func(conn *websocket.Conn, msg *websocket.WsMessage) {
+			s.routeWSMessage(actorID, playerID, msg)
+		})
+}
+
+// routeWSMessage dispatches incoming WebSocket messages to the correct actor.
+func (s *Service) routeWSMessage(actorID, playerID string, msg *websocket.WsMessage) {
+	switch msg.Type {
+	case websocket.TypeAction:
+		data, _ := msg.Data.(map[string]any)
+		action, _ := data["action"].(string)
+		actionData := data["data"]
+		am := actor.ActionMessage(playerID, action, actionData)
+		s.actorSystem.SendTo(actorID, am)
+
+	case websocket.TypeReady:
+		rm := actor.NewMessage(actor.MsgPlayerReady, playerID, nil)
+		s.actorSystem.SendTo(actorID, rm)
+
+	case websocket.TypeChat:
+		data, _ := msg.Data.(map[string]any)
+		message, _ := data["message"].(string)
+		s.wsGateway.BroadcastToRoom("", "chat", map[string]any{
+			"from":    playerID,
+			"message": message,
+		})
+
+	case websocket.TypePing:
+		// Handled by ReadPump/WritePump heartbeat
+
+	default:
+		slog.Warn("unknown ws message type", "type", msg.Type, "player", playerID)
+	}
+}
 
 // createGameActor initializes a GameActor with a goja engine for a room.
 func (s *Service) createGameActor(game *Game, roomID string, maxPlayers int) error {
@@ -284,19 +410,20 @@ func (s *Service) createGameActor(game *Game, roomID string, maxPlayers int) err
 	roomAdapter := &gormRoomAdapter{db: s.db, roomID: roomID}
 	eng := engine.NewGojaEngine(hubAdapter, roomAdapter)
 
-	// Initialize engine
+	// Initialize engine with sandbox config
 	ctx := context.Background()
 	config := &engine.EngineConfig{
 		GameID:   fmt.Sprintf("%d", game.ID),
 		RoomID:   roomID,
 		GameCode: game.GameCode,
 		Version:  "latest",
+		Sandbox:  engine.DefaultSandboxConfig(),
 	}
 	if err := eng.Init(ctx, config); err != nil {
 		return fmt.Errorf("init engine: %w", err)
 	}
 
-	// Create and register actor
+	// Create actor config
 	cfg := actor.GameActorConfig{
 		GameID:     fmt.Sprintf("%d", game.ID),
 		RoomID:     roomID,
@@ -308,6 +435,12 @@ func (s *Service) createGameActor(game *Game, roomID string, maxPlayers int) err
 		Engine:     eng,
 	}
 	gameActor := actor.NewGameActor(cfg)
+
+	// Wire timer callback to route back through actor inbox
+	eng.SetTimerCallback(func(timerID int) {
+		gameActor.Send(actor.NewMessage(actor.MsgTimer, "", &actor.TimerData{ID: timerID}))
+	})
+
 	return s.actorSystem.Register(gameActor)
 }
 

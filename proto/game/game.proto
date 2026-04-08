@@ -1,0 +1,58 @@
+syntax = "proto3";
+
+package game;
+
+option go_package = "online-game/proto/game";
+
+service GameService {
+  // GetGame retrieves a game by ID.
+  rpc GetGame(GetGameRequest) returns (GameResponse);
+  // ListGames returns a paginated list of published games.
+  rpc ListGames(ListGamesRequest) returns (ListGamesResponse);
+  // GetRoom retrieves a room by room ID.
+  rpc GetRoom(GetRoomRequest) returns (RoomResponse);
+}
+
+message GetGameRequest {
+  int64 game_id = 1;
+}
+
+message GameResponse {
+  int64 id = 1;
+  string game_code = 2;
+  string game_name = 3;
+  string game_type = 4;
+  int32 min_players = 5;
+  int32 max_players = 6;
+  string status = 7;
+  string description = 8;
+  string entry = 9;
+  string client_entry = 10;
+}
+
+message ListGamesRequest {
+  string status = 1;
+  string game_type = 2;
+  string search = 3;
+  int32 page = 4;
+  int32 page_size = 5;
+}
+
+message ListGamesResponse {
+  repeated GameResponse games = 1;
+  int64 total = 2;
+}
+
+message GetRoomRequest {
+  string room_id = 1;
+}
+
+message RoomResponse {
+  int64 id = 1;
+  string room_id = 2;
+  int64 game_id = 3;
+  string room_name = 4;
+  string owner_id = 5;
+  int32 max_players = 6;
+  string status = 7;
+}

@@ -1,27 +1,31 @@
 # 在线游戏平台 - 实施计划
 
-## 当前进度（更新于 2026-03-28）
+## 当前进度（更新于 2026-03-29，第二轮）
 
 ### 已完成 ✅
 
-**Go 后端微服务（24 个文件，约 3900 行，`go build` + `go vet` 全部通过）**
+**Go 后端微服务（约 30 个文件，约 5000 行，`go build` + `go vet` + `go test` 全部通过）**
 
 | 模块 | 文件 | 说明 |
 |------|------|------|
-| **cmd/api-gateway** | main.go | 反向代理，路径路由到各服务，静态资源服务 |
-| **cmd/user-service** | main.go | 用户服务：注册、登录、JWT、GORM |
-| **cmd/game-service** | main.go | 游戏服务：ActorSystem + WebSocket + goja |
-| **cmd/admin-service** | main.go | 管理服务：游戏CRUD、zip上传解压校验、发布 |
+| **cmd/api-gateway** | main.go | 反向代理，路径路由到各服务，静态资源服务，WebSocket 代理 |
+| **cmd/user-service** | main.go | 用户服务：HTTP+gRPC 双协议、注册、登录、JWT、GORM |
+| **cmd/game-service** | main.go | 游戏服务：HTTP+gRPC 双协议、ActorSystem + WebSocket + goja |
+| **cmd/admin-service** | main.go | 管理服务：gRPC 客户端鉴权、游戏CRUD、zip上传解压校验 |
 | **pkg/actor** | actor.go, system.go, message.go, game_actor.go | Actor 内核：BaseActor inbox channel + GameActor 持有 goja |
-| **pkg/engine** | engine.go, js_engine.go | goja 引擎：20+ 宿主API注入、SDK runtime + 全局生命周期钩子桥接 |
-| **pkg/websocket** | gateway.go | WebSocket 网关：连接管理、房间广播、sync.Map |
-| **pkg/config** | config.go | 环境驱动配置加载 |
+| **pkg/engine** | engine.go, js_engine.go, sandbox.go | goja 引擎：20+ 宿主API注入、SDK runtime、沙箱限制 |
+| **pkg/websocket** | gateway.go, conn.go | WebSocket 网关：连接管理、房间广播、ReadPump/WritePump |
+| **pkg/grpc** | server.go, client.go | gRPC 服务器/客户端：StartServer + UserServiceClient + GameServiceClient |
+| **pkg/config** | config.go | 环境驱动配置加载（含 GRPCPort） |
 | **pkg/db** | db.go | GORM PostgreSQL 连接池 |
-| **pkg/auth** | jwt.go | JWT 生成/验证 |
+| **pkg/auth** | jwt.go | JWT 生成/验证 + Redis 黑名单 |
+| **pkg/redis** | redis.go | Redis 客户端 + 缓存辅助 |
 | **pkg/api** | response.go | 统一 JSON 响应 `{code, message, data}` |
 | **pkg/apperror** | app_error.go | 统一错误码 (HTTP_STATUS*100+SEQ) |
-| **internal/user** | model.go, service.go, handler.go | 用户注册/登录、JWT 鉴权中间件 |
-| **internal/game** | model.go, service.go, handler.go | 房间CRUD、Actor 创建、WebSocket 桥接 |
+| **proto/user** | user.proto, user.pb.go, user_grpc.pb.go | UserService gRPC: ValidateToken + GetUser |
+| **proto/game** | game.proto, game.pb.go, game_grpc.pb.go | GameService gRPC: GetGame + ListGames + GetRoom |
+| **internal/user** | model.go, service.go, handler.go, grpc.go | 用户注册/登录、JWT 鉴权、gRPC 服务端 |
+| **internal/game** | model.go, service.go, handler.go, grpc.go | 房间CRUD、Actor 创建、WebSocket 桥接、gRPC 服务端 |
 | **internal/admin** | handler.go | 游戏 CRUD、zip 解压校验、manifest 验证 |
 | **internal/server** | server.go | 通用 HTTP server（Gin + 优雅关闭） |
 
@@ -38,10 +42,11 @@
 
 | 任务 | 状态 | 说明 |
 |------|------|------|
-| **gRPC 通信** | 🔲 | 当前服务间通过 HTTP，待改为 gRPC |
-| **Redis 缓存** | 🔲 | pkg/redis 已规划但未实现 |
-| **Vue 3 大厅 SPA** | 🔲 | 玩家前端大厅 |
-| **Actor 沙箱** | 🔲 | 内存限制、执行超时、调用栈深度 |
+| **gRPC 通信** | ✅ | proto/user + proto/game + gRPC server/client + admin-service 通过 gRPC 鉴权 |
+| **Redis 缓存** | ✅ | pkg/redis + JWT 黑名单 + 游戏/用户缓存 + 沙箱 |
+| **Vue 3 大厅 SPA** | ✅ | web/lobby/ — Vue 3 + TypeScript + Vite + Pinia + 暗色主题 |
+| **Actor 沙箱** | ✅ | 执行超时、调用栈限制、脚本大小限制、定时器限制、eval 禁用 |
+| **WebSocket 代理** | ✅ | /ws 端点 + ReadPump/WritePump + Gateway WS 代理 |
 | **单元/集成测试** | 🔲 | Actor、Engine、Service 测试 |
 
 ### 实际目录结构
@@ -1372,79 +1377,43 @@ blackjack-v1.0.0.zip
 
 ---
 
-## 六、实施阶段（更新于 2026-03-28）
+## 六、实施阶段（更新于 2026-03-29）
 
 ### Phase 1: 基础设施 + Actor 内核 ✅ 已完成
-1. ✅ 初始化 go.mod，引入核心依赖（goja, gin, gorm, gorilla/websocket, jwt, uuid）
-2. 🔲 proto 定义（user.proto, game.proto）— 暂用 HTTP 替代 gRPC
+1. ✅ 初始化 go.mod，引入核心依赖（goja, gin, gorm, gorilla/websocket, jwt, uuid, grpc）
+2. ✅ proto 定义（user.proto, game.proto）+ Go stub 生成
 3. ✅ 公共包：config, db, api/response, apperror, auth/jwt
 4. ✅ **Actor 内核**：pkg/actor/
-   - ✅ actor.go: BaseActor（inbox channel + 处理循环 + panic recovery + 优雅关闭）
-   - ✅ system.go: ActorSystem（sync.Map 注册中心，并行关闭 + 超时）
-   - ✅ message.go: 消息类型定义（9 种消息类型 + payload 结构体）
-   - ✅ game_actor.go: GameActor（持有 goja engine，9 种消息处理，HubInterface/RoomManagerInterface 桥接）
-5. ✅ **goja 引擎**：pkg/engine/
-   - ✅ engine.go: GameEngine 接口 + EngineConfig + EngineStats
-   - ✅ js_engine.go: GojaEngine（20+ 宿主API注入、SDK runtime 注入、ES5 兼容 GameServer 对象）
-   - 🔲 sandbox.go: 沙箱策略（内存限制、执行超时、调用栈深度）
+5. ✅ **goja 引擎**：pkg/engine/（含 sandbox.go 沙箱策略）
 6. ✅ 通用 server 启动器（Gin + 优雅关闭 SIGINT/SIGTERM）
-7. 🔲 单元测试
+7. ✅ 单元测试（actor, auth, config, engine, websocket, grpc）
 
 ### Phase 2: WebSocket Hub ✅ 已完成
-1. ✅ pkg/websocket/gateway.go: WebSocket 连接管理（升级、心跳、读写 pump、sync.Map）
-2. ✅ WebSocket-Actor 桥接（game/service.go 中 wsHubAdapter + gormRoomAdapter）
-3. ✅ 事件协议：统一 JSON 格式 { type, data, seq, ts }
-4. 🔲 集成测试
+1. ✅ pkg/websocket/gateway.go + conn.go: ReadPump/WritePump + 心跳
+2. ✅ WebSocket-Actor 桥接
+3. ✅ WebSocket 代理（API Gateway → Game Service）
 
 ### Phase 3: 后端 SDK ✅ 已完成
-1. ✅ sdks/server-sdk/ TypeScript 项目
-   - ES5 编译目标，适配 goja runtime
-   - GameServer 抽象类：生命周期钩子 + 平台 API 封装
-   - register() 函数桥接 TypeScript 类到全局 GameServer 运行时
-2. 🔲 npm 包发布配置
-
 ### Phase 4: 前端 SDK ✅ 已完成
-1. ✅ sdks/client-sdk/ TypeScript 项目
-   - ES2020 编译目标，浏览器运行
-   - WebSocket + 断线重连 + 心跳 + EventEmitter
-   - GameClient 抽象类 + 14 个生命周期钩子
-2. 🔲 npm 包发布配置
+### Phase 5: User Service ✅ 已完成（含 gRPC Server）
+### Phase 6: Admin Service ✅ 已完成（含 gRPC Client 鉴权）
+### Phase 7: Game Service ✅ 已完成（含 gRPC Server）
 
-### Phase 5: User Service ✅ 已完成
-1. ✅ 数据模型（User, UserSession, LoginRequest/RegisterRequest/LoginResponse/UserInfo）
-2. ✅ Service（Register, Login bcrypt, GetUser, ValidateToken, Migrate）
-3. ✅ Handler（JWT 鉴权中间件 + RESTful 路由）
-4. ✅ main.go 启动流程
-5. 🔲 gRPC Server（ValidateToken）— 暂用 HTTP
-
-### Phase 6: Admin Service ✅ 已完成
-1. ✅ 数据模型（Game, GameVersion，合并在 handler.go）
-2. ✅ 游戏包解压校验（zip 提取 + manifest.json 验证 + 入口脚本检查）
-3. ✅ Service + Handler（Game CRUD、上传、发布/下架）
-4. ✅ 静态资源服务（game-assets）
-5. ✅ main.go 启动流程
-
-### Phase 7: Game Service ✅ 已完成
-1. ✅ internal/game/model.go: Game, GameVersion, GameRoom, GameSession, RoomPlayer, CreateRoomRequest
-2. ✅ internal/game/service.go: GameService 整合 ActorSystem + WebSocket Gateway + GORM
-   - wsHubAdapter 实现 HubInterface（路由 Actor 输出到 WS）
-   - gormRoomAdapter 实现 RoomManagerInterface（数据库操作）
-   - createGameActor() 方法创建 engine + actor + 注册
-3. ✅ internal/game/handler.go: HTTP Handler（games 列表/详情、rooms CRUD/join/leave/start/action）
-4. ✅ main.go 启动流程：DB → ActorSystem → WebSocket Gateway → Service → Handler → Server
-
-### Phase 8: API Gateway ✅ 已完成（基础版）
-1. ✅ HTTP 反向代理（路径到服务映射：users→:8001, games/rooms→:8002, admin→:8003）
-2. ✅ 游戏前端静态资源服务
-3. 🔲 限流、熔断
-4. 🔲 WebSocket 代理
+### Phase 8: API Gateway ✅ 已完成
+1. ✅ HTTP 反向代理 + WebSocket 代理
+2. 🔲 限流、熔断
 
 ### Phase 9: 示例游戏 & 部署 ✅ 已完成
-1. ✅ 示例游戏：21点（完整游戏逻辑：下注/要牌/停牌/加倍/庄家AI/胜负判定）
-2. ✅ docker-compose.yml（PostgreSQL + 4 服务）
-3. ✅ Dockerfile（统一多阶段构建）
-4. ✅ 环境配置文件（4 个 .env）
-5. ✅ Makefile 目标（docker-build/up/down/logs）
+### Phase 10: gRPC 通信 ✅ 已完成
+1. ✅ proto/user: ValidateToken + GetUser
+2. ✅ proto/game: GetGame + ListGames + GetRoom
+3. ✅ pkg/grpc/server.go: StartServer + GracefulStop
+4. ✅ pkg/grpc/client.go: UserServiceClient + GameServiceClient
+5. ✅ internal/user/grpc.go: gRPC server 实现
+6. ✅ internal/game/grpc.go: gRPC server 实现
+7. ✅ admin-service: gRPC 客户端连接 user-service 进行 token 验证
+8. ✅ docker-compose.yml: 暴露 gRPC 端口 (9001, 9002)
+9. ✅ env 配置: GRPC_PORT + USER_GRPC_ADDR
 
 ---
 
@@ -1455,109 +1424,45 @@ online-game/
 ├── go.mod
 ├── Makefile
 ├── proto/
-│   ├── user/user.proto
-│   └── game/game.proto
-├── cmd/
-│   ├── api-gateway/main.go
-│   ├── user-service/main.go
-│   ├── game-service/main.go
-│   └── admin-service/main.go
-├── internal/
-│   ├── gateway/
-│   │   ├── gateway.go           # HTTP 反向代理 + WS 代理
-│   │   ├── transport.go
-│   │   ├── circuit_breaker.go
-│   │   └── rate_limiter.go
 │   ├── user/
-│   │   ├── handler.go
-│   │   ├── grpc.go              # gRPC server
-│   │   ├── service.go
-│   │   ├── repository.go
-│   │   └── model.go
+│   │   ├── user.proto
+│   │   ├── user.pb.go
+│   │   └── user_grpc.pb.go
+│   └── game/
+│       ├── game.proto
+│       ├── game.pb.go
+│       └── game_grpc.pb.go
+├── cmd/
+│   ├── api-gateway/main.go       # HTTP 反向代理 + WS 代理
+│   ├── user-service/main.go      # HTTP + gRPC 双协议
+│   ├── game-service/main.go      # HTTP + gRPC 双协议
+│   └── admin-service/main.go     # gRPC 客户端鉴权
+├── internal/
+│   ├── user/
+│   │   ├── model.go, service.go, handler.go, grpc.go
 │   ├── game/
-│   │   ├── handler.go           # HTTP + WebSocket Handler
-│   │   ├── service.go           # 业务逻辑
-│   │   ├── repository.go
-│   │   ├── model.go             # 数据模型
-│   │   ├── hub.go               # WebSocket Hub（实现 HubInterface）
-│   │   ├── instance.go          # 游戏实例管理（创建 Actor + Engine）
-│   │   └── grpc.go              # gRPC server + client
+│   │   ├── model.go, service.go, handler.go, grpc.go
 │   ├── admin/
-│   │   ├── handler.go
-│   │   ├── service.go
-│   │   ├── repository.go
-│   │   ├── model.go
-│   │   └── packager.go          # zip 解压校验
+│   │   └── handler.go
 │   └── server/
-│       └── server.go            # 通用 HTTP server
+│       └── server.go
 ├── pkg/
-│   ├── actor/                   # ★ Actor 核心
-│   │   ├── actor.go             # BaseActor（inbox channel + 处理循环）
-│   │   ├── system.go            # ActorSystem（注册中心）
-│   │   ├── game_actor.go        # GameActor（持有 goja engine）
-│   │   ├── message.go           # 消息类型定义
-│   │   └── hub_interface.go     # HubInterface / RoomManagerInterface
-│   ├── engine/                  # ★ goja 引擎
-│   │   ├── engine.go            # GameEngine 接口
-│   │   ├── js_engine.go         # GojaEngine（runtime + 宿主API注入）
-│   │   └── sandbox.go           # 沙箱策略
-│   ├── websocket/               # WebSocket 连接管理
-│   │   ├── gateway.go           # Gateway + Conn
-│   │   └── message.go           # 消息协议类型
-│   ├── api/
-│   │   ├── response.go
-│   │   └── header.go
-│   ├── apperror/
-│   │   ├── app_error.go
-│   │   └── constant.go
-│   ├── auth/
-│   │   └── jwt.go
-│   ├── config/
-│   │   └── config.go
-│   ├── db/
-│   │   └── db.go
-│   └── redis/
-│       └── redis.go
+│   ├── actor/
+│   ├── engine/
+│   ├── websocket/
+│   ├── grpc/                     # gRPC 服务器/客户端工具
+│   │   ├── server.go
+│   │   ├── client.go
+│   │   └── grpc_test.go
+│   ├── redis/
+│   ├── config/, db/, auth/, api/, apperror/
 ├── sdks/
-│   ├── server-sdk/              # @gameplatform/server-sdk ✅
-│   │   ├── src/
-│   │   │   ├── GameServer.ts    # 抽象类（生命周期钩子 + 平台 API + register()）
-│   │   │   ├── types.ts        # GameContext, PlayerInfo, GameResults 等类型
-│   │   │   └── index.ts
-│   │   ├── package.json
-│   │   └── tsconfig.json        # 编译目标 ES5（goja 兼容）
-│   └── client-sdk/              # @gameplatform/client-sdk ✅
-│       ├── src/
-│       │   ├── GameClient.ts    # 抽象类（14 个生命周期钩子）
-│       │   ├── Connection.ts    # WebSocket 连接管理（重连+心跳）
-│       │   ├── EventEmitter.ts  # 事件系统
-│       │   ├── types.ts
-│       │   └── index.ts
-│       ├── package.json
-│       └── tsconfig.json        # 编译目标 ES2020
+│   ├── server-sdk/
+│   └── client-sdk/
 ├── deploy/
-│   ├── docker-compose.yml       # PostgreSQL + 4 服务 + Redis ✅
-│   ├── docker/
-│   │   └── Dockerfile.service   # 统一多阶段构建 ✅
-│   └── config/
-│       ├── gateway.env          # ✅
-│       ├── user-service.env     # ✅
-│       ├── game-service.env     # ✅
-│       └── admin-service.env    # ✅
-├── data/
-│   └── games/                   # 游戏包存储
+│   ├── docker-compose.yml
+│   ├── docker/Dockerfile.service
+│   └── config/*.env
 └── examples/
-    └── games/
-        └── blackjack/
-            ├── manifest.json
-            ├── server/
-            │   └── main.ts      # 使用 @gameplatform/server-sdk
-            ├── client/
-            │   ├── index.html
-            │   ├── src/
-            │   │   └── main.ts  # 使用 @gameplatform/client-sdk
-            │   ├── package.json
-            │   └── vite.config.ts
-            ├── package.json
-            └── tsconfig.json
+    └── games/blackjack/
 ```
